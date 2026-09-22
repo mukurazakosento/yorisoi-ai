@@ -1,0 +1,32 @@
+name: YorisoiAI
+
+options:
+  bundleIdPrefix: jp.yorisoi
+  deploymentTarget:
+    iOS: "27.0"
+
+targets:
+
+  YorisoiAI:
+    type: application
+    platform: iOS
+
+    sources:
+      - YorisoiAIApp.swift
+      - ScreenCaptureCoordinator.swift
+      - InstructionPlanner.swift
+      - NotificationCoordinator.swift
+
+    info:
+      path: Info.plist
+
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: jp.yorisoi.app
+      SWIFT_VERSION: "5.0"
+      TARGETED_DEVICE_FAMILY: "1,2"
+      INFOPLIST_KEY_NSScreenCaptureUsageDescription: "スマートフォンの画面を解析して、次に行う操作を案内するために使用します。"
+
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: jp.yorisoi.app
+      SWIFT_VERSION: "5.0"
+      TARGETED_DEVICE_FAMILY: "1,2"
