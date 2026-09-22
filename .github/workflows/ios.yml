@@ -1,4 +1,4 @@
-name: Build iOS App
+name: Build iOS IPA
 
 on:
   push:
@@ -32,6 +32,30 @@ jobs:
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
             -configuration Debug \
+            -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             build
+
+      - name: Create IPA
+        run: |
+          APP_PATH=$(find build/Build/Products/Debug-iphoneos -maxdepth 1 -name "*.app" -type d | head -n 1)
+
+          if [ -z "$APP_PATH" ]; then
+            echo "ERROR: .app not found"
+            exit 1
+          fi
+
+          echo "Found app: $APP_PATH"
+
+          rm -rf Payload
+          mkdir Payload
+          cp -R "$APP_PATH" Payload/
+
+          zip -r YorisoiAI.ipa Payload
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: YorisoiAI-IPA
+          path: YorisoiAI.ipa
