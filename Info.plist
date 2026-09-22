@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+ "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+
+    <key>CFBundleDisplayName</key>
+    <string>よりそいAI</string>
+
+    <key>CFBundleIdentifier</key>
+    <string>jp.example.yorisoi</string>
+
+    <key>CFBundleName</key>
+    <string>YorisoiAI</string>
+
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+
+    <key>UILaunchScreen</key>
+    <dict/>
+
+    <key>NSCameraUsageDescription</key>
+    <string>カメラはこのプロトタイプでは使用しません。</string>
+
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>スマートフォンの画面を解析して、次に行う操作を案内するために使用します。</string>
+
+    <key>UIBackgroundModes</key>
+    <array>
+        <string>screen-capture</string>
+    </array>
+
+</dict>
+</plist>
