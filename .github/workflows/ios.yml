@@ -41,12 +41,45 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             build
 
-      - name: Build Simulator
+name: Build iOS App
+
+on:
+  push:
+    branches:
+      - main
+
+  workflow_dispatch:
+
+jobs:
+
+  build:
+
+    runs-on: xcode-27
+
+    steps:
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: |
+          brew install xcodegen
+
+      - name: Generate Xcode project
+        run: |
+          xcodegen generate
+
+      - name: Show Xcode version
+        run: |
+          xcodebuild -version
+
+      - name: Build iOS device
         run: |
           xcodebuild \
             -project YorisoiAI.xcodeproj \
             -scheme YorisoiAI \
-            -sdk iphonesimulator \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
             -configuration Debug \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
