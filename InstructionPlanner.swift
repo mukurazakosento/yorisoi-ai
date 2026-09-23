@@ -1,107 +1,204 @@
 import Foundation
 
-struct InstructionStep {
-    let detectKeyword: String
+struct InstructionStep: Identifiable {
+    let id = UUID()
     let message: String
+
+    // OCRで、この文字が画面に出てきたら次のステップへ進む
+    let detectKeyword: String
 }
 
-struct InstructionPlanner {
+@MainActor
+final class InstructionPlanner {
 
-    func plan(for request: String) -> [InstructionStep] {
-        let text = request.lowercased()
+    func makePlan(for goal: String) -> [InstructionStep] {
 
-        if text.contains("写真")
-            || text.contains("画像")
-            || text.contains("孫") {
+        let normalizedGoal = goal
+            .replacingOccurrences(of: " ", with: "")
+            .replacingOccurrences(of: "　", with: "")
+            .lowercased()
+
+        // --------------------------------------------------
+        // 孫に写真を送りたい
+        // --------------------------------------------------
+        if normalizedGoal.contains("孫")
+            && (normalizedGoal.contains("写真")
+                || normalizedGoal.contains("画像")
+                || normalizedGoal.contains("送")) {
 
             return [
                 InstructionStep(
-                    detectKeyword: "LINE",
-                    message: "LINEを開いてください。"
+                    message: "LINEを開いてください。",
+                    detectKeyword: "LINE"
                 ),
 
                 InstructionStep(
-                    detectKeyword: "孫",
-                    message: "「孫」のトークを開いてください。"
+                    message: "「孫」のトークを開いてください。",
+                    detectKeyword: "孫"
                 ),
 
                 InstructionStep(
-                    detectKeyword: "＋",
-                    message: "「＋」ボタンを押してください。"
+                    message: "「＋」ボタンを押してください。",
+                    detectKeyword: "+"
                 ),
 
                 InstructionStep(
-                    detectKeyword: "写真",
-                    message: "送りたい写真を選んでください。"
+                    message: "「写真」を選んでください。",
+                    detectKeyword: "写真"
+                ),
+
+                InstructionStep(
+                    message: "送りたい写真を選んでください。",
+                    detectKeyword: "選択"
+                ),
+
+                InstructionStep(
+                    message: "「送信」ボタンを押してください。",
+                    detectKeyword: "送信"
                 )
             ]
         }
 
-        if text.contains("地図")
-            || text.contains("駅") {
+        // --------------------------------------------------
+        // 写真を送りたい
+        // --------------------------------------------------
+        if normalizedGoal.contains("写真")
+            && (normalizedGoal.contains("送")
+                || normalizedGoal.contains("送り")) {
 
             return [
                 InstructionStep(
-                    detectKeyword: "地図",
-                    message: "地図アプリを開いてください。"
+                    message: "LINEを開いてください。",
+                    detectKeyword: "LINE"
                 ),
 
                 InstructionStep(
-                    detectKeyword: "検索",
-                    message: "検索欄を押してください。"
+                    message: "送りたい相手のトークを開いてください。",
+                    detectKeyword: "トーク"
+                ),
+
+                InstructionStep(
+                    message: "「＋」ボタンを押してください。",
+                    detectKeyword: "+"
+                ),
+
+                InstructionStep(
+                    message: "「写真」を選んでください。",
+                    detectKeyword: "写真"
+                ),
+
+                InstructionStep(
+                    message: "送りたい写真を選んでください。",
+                    detectKeyword: "選択"
+                ),
+
+                InstructionStep(
+                    message: "「送信」ボタンを押してください。",
+                    detectKeyword: "送信"
                 )
             ]
         }
 
-        if text.contains("市役所")
-            || text.contains("行政")
-            || text.contains("申請")
-            || text.contains("手続き") {
+        // --------------------------------------------------
+        // LINEでメッセージを送りたい
+        // --------------------------------------------------
+        if normalizedGoal.contains("line")
+            && (normalizedGoal.contains("メッセージ")
+                || normalizedGoal.contains("メッセージを送")
+                || normalizedGoal.contains("連絡")) {
 
             return [
                 InstructionStep(
-                    detectKeyword: "Safari",
-                    message: "インターネットを開いてください。"
+                    message: "LINEを開いてください。",
+                    detectKeyword: "LINE"
                 ),
 
                 InstructionStep(
-                    detectKeyword: "申請",
-                    message: "「申請・手続き」を押してください。"
+                    message: "メッセージを送りたい相手のトークを開いてください。",
+                    detectKeyword: "トーク"
                 ),
 
                 InstructionStep(
-                    detectKeyword: "本人確認",
-                    message: "本人確認画面です。個人情報はご自身で入力してください。"
+                    message: "メッセージを入力してください。",
+                    detectKeyword: "メッセージ"
+                ),
+
+                InstructionStep(
+                    message: "「送信」ボタンを押してください。",
+                    detectKeyword: "送信"
                 )
             ]
         }
 
+        // --------------------------------------------------
+        // LINEを開きたい
+        // --------------------------------------------------
+        if normalizedGoal.contains("line") {
+
+            return [
+                InstructionStep(
+                    message: "LINEを開いてください。",
+                    detectKeyword: "LINE"
+                )
+            ]
+        }
+
+        // --------------------------------------------------
+        // 電話をかけたい
+        // --------------------------------------------------
+        if normalizedGoal.contains("電話")
+            || normalizedGoal.contains("電話をかけ") {
+
+            return [
+                InstructionStep(
+                    message: "「電話」アプリを開いてください。",
+                    detectKeyword: "電話"
+                ),
+
+                InstructionStep(
+                    message: "電話をかけたい相手を選んでください。",
+                    detectKeyword: "連絡先"
+                ),
+
+                InstructionStep(
+                    message: "電話番号を確認して、発信ボタンを押してください。",
+                    detectKeyword: "発信"
+                )
+            ]
+        }
+
+        // --------------------------------------------------
+        // Googleで検索したい
+        // --------------------------------------------------
+        if normalizedGoal.contains("検索")
+            || normalizedGoal.contains("調べ") {
+
+            return [
+                InstructionStep(
+                    message: "SafariまたはGoogleを開いてください。",
+                    detectKeyword: "Safari"
+                ),
+
+                InstructionStep(
+                    message: "検索したい内容を入力してください。",
+                    detectKeyword: "検索"
+                ),
+
+                InstructionStep(
+                    message: "検索結果が表示されたら、目的のページを選んでください。",
+                    detectKeyword: "検索結果"
+                )
+            ]
+        }
+
+        // --------------------------------------------------
+        // それ以外
+        // --------------------------------------------------
         return [
             InstructionStep(
-                detectKeyword: "",
-                message: "画面を確認しています。次の操作を案内します。"
+                message: "まず、目的のアプリを開いてください。",
+                detectKeyword: ""
             )
         ]
-    }
-}
-
-enum PrivacyGuard {
-
-    static func isSensitive(_ text: String) -> Bool {
-        let keywords = [
-            "パスワード",
-            "暗証番号",
-            "口座番号",
-            "カード番号",
-            "セキュリティコード",
-            "マイナンバー",
-            "本人確認",
-            "生年月日",
-            "ログイン"
-        ]
-
-        return keywords.contains {
-            text.localizedCaseInsensitiveContains($0)
-        }
     }
 }
