@@ -3,7 +3,9 @@ import ScreenCaptureKit
 import Vision
 import CoreMedia
 import CoreVideo
+import QuartzCore
 
+@available(iOS 27.0, *)
 final class ScreenCaptureCoordinator: NSObject,
                                       SCContentSharingPickerObserver,
                                       SCStreamOutput,
@@ -11,10 +13,7 @@ final class ScreenCaptureCoordinator: NSObject,
 
     // MARK: - Callbacks
 
-    /// OCRで読み取った画面上の文字を返す
     var onOCR: ((String) -> Void)?
-
-    /// 状態表示用
     var onStatus: ((String) -> Void)?
 
     // MARK: - Screen Capture
@@ -29,11 +28,15 @@ final class ScreenCaptureCoordinator: NSObject,
     // MARK: - OCR
 
     private var lastOCRTime: CFTimeInterval = 0
+
+    // 約1秒に1回OCRする
     private let ocrInterval: CFTimeInterval = 0.8
 
     // MARK: - State
 
     private var isPaused = false
+
+    // MARK: - Init
 
     override init() {
         super.init()
@@ -45,19 +48,19 @@ final class ScreenCaptureCoordinator: NSObject,
     }
 
     deinit {
+        picker.remove(self)
         picker.isActive = false
     }
 
     // MARK: - Start
 
-    /// iPhone全体の画面共有を開始
     func startFullDisplayCapture() async throws {
 
         await MainActor.run {
             self.onStatus?("画面共有の確認を表示しています")
 
-            // システム標準の画面共有ピッカーを表示
-            self.picker.present(using: .display)
+            // iOS 27のシステム画面共有ピッカー
+            self.picker.present()
         }
     }
 
@@ -77,19 +80,20 @@ final class ScreenCaptureCoordinator: NSObject,
 
     func stop() {
 
-        let currentStream = stream
-        stream = nil
-
-        guard let currentStream else {
+        guard let currentStream = stream else {
             onStatus?("画面キャプチャ：停止")
             return
         }
+
+        stream = nil
 
         Task {
             do {
                 try await currentStream.stopCapture()
             } catch {
-                print("画面キャプチャ停止エラー: \(error)")
+                print(
+                    "画面キャプチャ停止エラー: \(error.localizedDescription)"
+                )
             }
 
             await MainActor.run {
@@ -100,43 +104,38 @@ final class ScreenCaptureCoordinator: NSObject,
 
     // MARK: - SCContentSharingPickerObserver
 
-    /// ユーザーが画面共有対象を選択したとき
     func contentSharingPicker(
         _ picker: SCContentSharingPicker,
         didUpdateWith filter: SCContentFilter,
         for stream: SCStream?
     ) {
 
-        // 既存ストリームがある場合はフィルターだけ更新
-        if let existingStream = stream {
-            do {
-                existingStream.updateContentFilter(filter) { error in
-
-                    if let error {
-                        print("フィルター更新エラー: \(error)")
-                    } else {
-                        print("フィルター更新成功")
-                    }
-                }
-            }
-
+        // iOSでは既存SCStreamの
+        // updateContentFilter が利用できないため、
+        // 最初の選択時だけ新規ストリームを作る。
+        if stream != nil {
+            onStatus?("画面共有設定を更新しました")
             return
         }
 
-        // 新しいストリームを作成
+        // 念のため既存ストリームがあれば停止
+        if let oldStream = self.stream {
+            self.stream = nil
+
+            Task {
+                try? await oldStream.stopCapture()
+            }
+        }
+
         let configuration = SCStreamConfiguration()
 
-        // 画面だけ取得
+        // 音声は不要
         configuration.capturesAudio = false
+        configuration.captureMicrophone = false
 
-        // 過剰に大量のフレームを溜めない
-        configuration.queueDepth = 3
-
-        // OCR用なので60fpsは不要
-        configuration.minimumFrameInterval = CMTime(
-            value: 1,
-            timescale: 10
-        )
+        // iOSではqueueDepth / minimumFrameIntervalを
+        // 明示設定しない。
+        // OCR側で処理頻度を制御する。
 
         let newStream = SCStream(
             filter: filter,
@@ -152,7 +151,7 @@ final class ScreenCaptureCoordinator: NSObject,
                 sampleHandlerQueue: screenFrameQueue
             )
 
-            stream = newStream
+            self.stream = newStream
 
             onStatus?("画面キャプチャ開始")
 
@@ -190,26 +189,14 @@ final class ScreenCaptureCoordinator: NSObject,
         }
     }
 
-    /// ユーザーが画面共有をキャンセルしたとき
     func contentSharingPicker(
         _ picker: SCContentSharingPicker,
         didCancelFor stream: SCStream?
     ) {
 
         onStatus?("画面共有がキャンセルされました")
-
-        if let stream {
-            stream.stopCapture { error in
-                if let error {
-                    print(
-                        "キャンセル時の停止エラー: \(error)"
-                    )
-                }
-            }
-        }
     }
 
-    /// 画面共有ピッカー開始に失敗したとき
     func contentSharingPickerStartDidFailWithError(
         _ error: any Error
     ) {
@@ -225,7 +212,6 @@ final class ScreenCaptureCoordinator: NSObject,
 
     // MARK: - SCStreamOutput
 
-    /// 画面フレームを受け取る
     func stream(
         _ stream: SCStream,
         didOutputSampleBuffer sampleBuffer: CMSampleBuffer,
@@ -244,7 +230,7 @@ final class ScreenCaptureCoordinator: NSObject,
             return
         }
 
-        // OCRしすぎないように間引く
+        // OCRを毎フレーム実行しない
         let now = CACurrentMediaTime()
 
         guard now - lastOCRTime >= ocrInterval else {
@@ -280,7 +266,6 @@ final class ScreenCaptureCoordinator: NSObject,
             }
 
             let texts = observations.compactMap { observation in
-
                 observation
                     .topCandidates(1)
                     .first?
@@ -303,7 +288,6 @@ final class ScreenCaptureCoordinator: NSObject,
         request.recognitionLevel = .fast
         request.usesLanguageCorrection = true
 
-        // 日本語 + 英語
         request.recognitionLanguages = [
             "ja-JP",
             "en-US"
@@ -335,16 +319,16 @@ final class ScreenCaptureCoordinator: NSObject,
             "SCStream stopped: \(error.localizedDescription)"
         )
 
+        if self.stream === stream {
+            self.stream = nil
+        }
+
         Task {
             await MainActor.run {
                 self.onStatus?(
                     "画面キャプチャが停止しました"
                 )
             }
-        }
-
-        if self.stream === stream {
-            self.stream = nil
         }
     }
 }
