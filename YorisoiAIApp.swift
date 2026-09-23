@@ -1,5 +1,5 @@
+```swift
 import SwiftUI
-import UserNotifications
 
 @main
 struct YorisoiAIApp: App {
@@ -14,504 +14,381 @@ struct YorisoiAIApp: App {
     }
 }
 
+// MARK: - Support Model
+
 @MainActor
 final class SupportModel: ObservableObject {
 
-    @Published var request = "孫に写真を送りたい"
-    @Published var status = "待機中"
-    @Published var notificationStatus = "通知：未許可"
-    @Published var captureStatus = "画面取得：停止中"
-    @Published var isRunning = false
-    @Published var lastOCR = ""
+    @Published var goal: String = ""
+    @Published var isRunning: Bool = false
 
-    let capture = ScreenCaptureCoordinator()
-    let notifications = NotificationCoordinator()
-    let planner = InstructionPlanner()
+    @Published var captureStatus: String = "待機中"
+    @Published var lastOCR: String = ""
+    @Published var notificationStatus: String = "通知確認中"
 
-    private var steps: [InstructionStep] = []
-    private var stepIndex = 0
+    private let capture = ScreenCaptureCoordinator()
+    private let notifications = NotificationCoordinator()
+    private let planner = InstructionPlanner()
 
-    // 同じ条件を連続して確認した回数
-    private var keywordMatchCount = 0
+    private var plan: [InstructionStep] = []
+    private var currentStepIndex: Int = 0
 
-    // 画面が変わったかを確認するためのOCR
-    private var previousOCR = ""
+    // 同じステップを何回連続で認識したか
+    private var keywordMatchCount: Int = 0
 
-    // MARK: - Init
+    // 最後にステップが進んだ時刻
+    private var lastProgressDate: Date = Date()
+
+    // 再通知した回数
+    private var reminderCount: Int = 0
+
+    // 再通知の間隔
+    private let reminderInterval: TimeInterval = 8
+
+    // 連続判定回数
+    private let requiredMatchCount = 2
 
     init() {
 
-        // OCR
         capture.onOCR = { [weak self] text in
-
             Task { @MainActor in
                 self?.processOCR(text)
             }
         }
 
-        // キャプチャ状態
-        capture.onStatus = { [weak self] text in
-
+        capture.onStatus = { [weak self] status in
             Task { @MainActor in
-                self?.captureStatus = text
+                self?.captureStatus = status
             }
         }
 
-        // 実際に画面キャプチャが始まった瞬間
         capture.onCaptureStarted = { [weak self] in
-
             Task { @MainActor in
+                guard let self else { return }
 
-                guard let self else {
-                    return
+                self.captureStatus = "画面解析中"
+
+                // キャプチャ開始直後に最初の案内を通知
+                if !self.plan.isEmpty {
+                    await self.sendCurrentInstruction()
                 }
-
-                guard self.isRunning else {
-                    return
-                }
-
-                self.status =
-                    "画面を確認しています。ホーム画面へ戻ってください。"
-
-                // ここでは即通知しない
-                // OCRで現在の画面を確認してから案内する
-                print("✅ 画面キャプチャ開始")
-                print("⏳ 現在の画面を確認中")
             }
+        }
+
+        Task { @MainActor in
+            await checkNotificationStatus()
         }
     }
 
-    // MARK: - Start
+    // MARK: - 通知状態確認
+
+    private func checkNotificationStatus() async {
+
+        let granted = await notifications.requestPermission()
+
+        if granted {
+            notificationStatus = "通知ON"
+        } else {
+            notificationStatus = "通知OFF"
+        }
+    }
+
+    // MARK: - 支援開始
 
     func start() {
 
-        Task {
+        guard !goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return
+        }
+
+        Task { @MainActor in
             await startAsync()
         }
     }
 
     private func startAsync() async {
 
-        let text = request
-            .trimmingCharacters(
-                in: .whitespacesAndNewlines
-            )
+        // 支援内容を作成
+        plan = planner.makePlan(for: goal)
 
-        guard !text.isEmpty else {
-
-            status =
-                "「したいこと」を入力してください。"
-
+        guard !plan.isEmpty else {
+            notificationStatus = "支援内容を作成できませんでした"
             return
         }
 
-        // 手順作成
-        steps = planner.plan(for: text)
-
-        stepIndex = 0
-
+        currentStepIndex = 0
         keywordMatchCount = 0
-        previousOCR = ""
+        reminderCount = 0
+        lastProgressDate = Date()
 
-        print("🧭 手順数: \(steps.count)")
+        // 通知権限
+        let granted = await notifications.requestPermission()
 
-        for (index, step) in steps.enumerated() {
-
-            print("----- 手順 \(index + 1) -----")
-            print("案内: \(step.message)")
-            print("検出文字: \(step.detectKeyword)")
-        }
-
-        // 通知許可
-        let permission =
-            await notifications.requestPermission()
-
-        notificationStatus = permission
-            ? "通知：許可済み"
-            : "通知：未許可"
-
-        guard permission else {
-
-            status =
-                "通知を許可してください。"
-
+        if granted {
+            notificationStatus = "通知ON"
+        } else {
+            notificationStatus = "通知OFF"
             return
         }
 
-        do {
+        isRunning = true
+        captureStatus = "画面取得を開始しています"
 
-            status =
-                "iPhoneの画面共有を選択してください。"
-
-            try await capture.startFullDisplayCapture()
-
-            isRunning = true
-
-            status =
-                "画面共有の許可を待っています。"
-
-        } catch {
-
-            status =
-                "画面共有を開始できませんでした。"
-
-            isRunning = false
-
-            print(
-                "❌ 画面共有開始エラー: \(error.localizedDescription)"
-            )
-        }
+        // 画面キャプチャ開始
+        capture.startFullDisplayCapture()
     }
 
-    // MARK: - Stop
+    // MARK: - OCR処理
 
-    func stop() {
-
-        capture.stop()
-
-        isRunning = false
-
-        status = "停止しました。"
-
-        captureStatus = "画面取得：停止中"
-
-        keywordMatchCount = 0
-        previousOCR = ""
-    }
-
-    // MARK: - OCR Processing
-
-    private func processOCR(
-        _ text: String
-    ) {
+    private func processOCR(_ text: String) {
 
         guard isRunning else {
             return
         }
 
-        guard stepIndex < steps.count else {
-            return
-        }
-
-        // OCR結果を画面表示
         lastOCR = text
 
-        print("")
-        print("📖 OCR受信")
-        print(text)
-
-        // --------------------------------------------------
-        // OCRの正規化
-        // --------------------------------------------------
-
-        let normalizedOCR =
-            normalizeOCR(text)
-
-        print("🧹 正規化OCR")
-        print(normalizedOCR)
-
-        // --------------------------------------------------
-        // 画面が変わったか確認
-        // --------------------------------------------------
-
-        if normalizedOCR != previousOCR {
-
-            previousOCR = normalizedOCR
-
-            print("🔄 OCR内容が更新されました")
-        }
-
-        // --------------------------------------------------
-        // プライバシー保護
-        // --------------------------------------------------
-
-        if PrivacyGuard.isSensitive(text) {
-
-            capture.pauseAnalysis()
-
-            Task {
-
-                await notifications.send(
-                    title: "よりそいAI",
-                    body:
-                        "個人情報を入力する画面です。ここからは画面を解析しません。ご自身で入力してください。"
-                )
-            }
-
-            status =
-                "🔒 プライバシーモード"
-
+        guard currentStepIndex < plan.count else {
             return
         }
 
-        capture.resumeAnalysis()
+        let step = plan[currentStepIndex]
 
-        // --------------------------------------------------
-        // 現在の手順
-        // --------------------------------------------------
+        // OCRを正規化
+        let normalizedOCR = normalize(text)
+        let normalizedKeyword = normalize(step.detectKeyword)
 
-        let step = steps[stepIndex]
+        print("🔎 OCR: \(text)")
+        print("🎯 現在の案内: \(step.message)")
+        print("🔑 判定キーワード: \(step.detectKeyword)")
 
-        let keyword =
-            normalizeOCR(step.detectKeyword)
-
-        print("")
-        print("🎯 現在の手順")
-        print(step.message)
-
-        print("🔎 検出キーワード")
-        print(keyword)
-
-        guard !keyword.isEmpty else {
-
-            print("⚠️ detectKeyword が空です")
-
+        // キーワードが空なら、このステップでは自動判定しない
+        guard !normalizedKeyword.isEmpty else {
+            checkReminder()
             return
         }
 
-        // --------------------------------------------------
-        // キーワード判定
-        // --------------------------------------------------
+        // OCRにキーワードが含まれているか
+        let matched = normalizedOCR.contains(normalizedKeyword)
 
-        if normalizedOCR.contains(keyword) {
+        if matched {
 
             keywordMatchCount += 1
 
-            print(
-                "✅ キーワード一致 \(keywordMatchCount)/3"
-            )
+            print("✅ キーワード一致 \(keywordMatchCount)/\(requiredMatchCount)")
 
-            status =
-                "画面確認中：\(keywordMatchCount)/3"
-
-            // 3回連続で確認できたら次へ
-            if keywordMatchCount >= 3 {
-
-                print("✅ 画面状態を確定")
+            // 十分な回数一致したら次へ
+            if keywordMatchCount >= requiredMatchCount {
 
                 keywordMatchCount = 0
+                reminderCount = 0
+                lastProgressDate = Date()
 
-                stepIndex += 1
-
-                if stepIndex < steps.count {
-
-                    sendCurrentInstruction()
-
-                } else {
-
-                    Task {
-
-                        await notifications.send(
-                            title: "よりそいAI",
-                            body:
-                                "ミッション達成です。お疲れさまでした。"
-                        )
-                    }
-
-                    status =
-                        "ミッション達成"
-
-                    capture.pauseAnalysis()
-                }
+                advanceToNextStep()
             }
 
         } else {
 
-            // 一度でも一致しなければ連続カウントをリセット
-            if keywordMatchCount > 0 {
-
-                print(
-                    "↩️ キーワード不一致 → カウントリセット"
-                )
-            }
-
+            // 一致しなかったら連続カウントをリセット
             keywordMatchCount = 0
+
+            // 一定時間進まなければ再通知
+            checkReminder()
         }
     }
 
-    // MARK: - Send Instruction
+    // MARK: - 次のステップへ
 
-    private func sendCurrentInstruction() {
+    private func advanceToNextStep() {
 
-        guard stepIndex < steps.count else {
+        currentStepIndex += 1
+
+        // 全ステップ完了
+        if currentStepIndex >= plan.count {
+
+            isRunning = false
+            capture.stop()
+
+            Task { @MainActor in
+                await notifications.send(
+                    title: "よりそいAI",
+                    body: "ミッション達成です。お疲れさまでした。"
+                )
+            }
+
+            captureStatus = "支援完了"
+
+            print("🎉 ミッション達成")
             return
         }
 
-        let step = steps[stepIndex]
-
-        print("")
-        print("📤 次の案内を送信")
-        print(step.message)
-
-        Task {
-
-            await notifications.send(
-                title: "よりそいAI",
-                body: step.message
-            )
+        // 次のステップの通知
+        Task { @MainActor in
+            await sendCurrentInstruction()
         }
-
-        status =
-            "案内中：\(step.message)"
     }
 
-    // MARK: - OCR Normalize
+    // MARK: - 現在の案内を通知
 
-    private func normalizeOCR(
-        _ text: String
-    ) -> String {
+    private func sendCurrentInstruction() async {
 
-        var result = text
-
-        // 改行・空白を削除
-        result = result.replacingOccurrences(
-            of: "\n",
-            with: ""
-        )
-
-        result = result.replacingOccurrences(
-            of: " ",
-            with: ""
-        )
-
-        result = result.replacingOccurrences(
-            of: "　",
-            with: ""
-        )
-
-        // よくあるOCR記号ノイズを削除
-        let charactersToRemove:
-            [Character] = [
-                "・",
-                "･",
-                "「",
-                "」",
-                "『",
-                "』",
-                "【",
-                "】"
-            ]
-
-        for character in charactersToRemove {
-
-            result = result.replacingOccurrences(
-                of: String(character),
-                with: ""
-            )
+        guard currentStepIndex < plan.count else {
+            return
         }
 
-        return result
-            .trimmingCharacters(
-                in: .whitespacesAndNewlines
+        let step = plan[currentStepIndex]
+
+        notificationStatus = "案内を送信中"
+
+        await notifications.send(
+            title: "よりそいAI",
+            body: step.message
+        )
+
+        notificationStatus = "通知送信済み"
+
+        print("📣 案内: \(step.message)")
+    }
+
+    // MARK: - 再通知
+
+    private func checkReminder() {
+
+        guard isRunning else {
+            return
+        }
+
+        guard currentStepIndex < plan.count else {
+            return
+        }
+
+        let now = Date()
+
+        // まだ8秒たっていない
+        guard now.timeIntervalSince(lastProgressDate) >= reminderInterval else {
+            return
+        }
+
+        // 再通知は1ステップにつき最大3回
+        guard reminderCount < 3 else {
+            return
+        }
+
+        reminderCount += 1
+        lastProgressDate = now
+
+        Task { @MainActor in
+
+            guard self.currentStepIndex < self.plan.count else {
+                return
+            }
+
+            let step = self.plan[self.currentStepIndex]
+
+            await self.notifications.send(
+                title: "よりそいAI",
+                body: "もう一度ご案内します。\n\(step.message)"
             )
-            .lowercased()
+
+            self.notificationStatus = "案内を再通知しました"
+
+            print("🔁 再通知 \(self.reminderCount)/3: \(step.message)")
+        }
+    }
+
+    // MARK: - OCR正規化
+
+    private func normalize(_ text: String) -> String {
+
+        let lowercased = text.lowercased()
+
+        let ignoredCharacters = CharacterSet(
+            charactersIn:
+                " \n\r\t　。、．，！？!?,:：;；「」『』（）()[]［］【】"
+        )
+
+        let cleaned = lowercased
+            .unicodeScalars
+            .filter {
+                !ignoredCharacters.contains($0)
+            }
+
+        return String(String.UnicodeScalarView(cleaned))
     }
 }
 
-// MARK: - ContentView
+// MARK: - Content View
 
 struct ContentView: View {
 
-    @EnvironmentObject private var model: SupportModel
+    @EnvironmentObject var model: SupportModel
 
     var body: some View {
 
-        VStack(spacing: 24) {
+        NavigationStack {
 
-            Spacer()
+            VStack(spacing: 20) {
 
-            Text("よりそいAI")
-                .font(
-                    .system(
-                        size: 38,
-                        weight: .bold
-                    )
-                )
+                Text("よりそいAI")
+                    .font(.largeTitle)
+                    .fontWeight(.bold)
 
-            Text(
-                "スマホで、したいことを入力してください"
-            )
-            .foregroundStyle(.secondary)
-
-            HStack {
+                Text("スマートフォン操作をお手伝いします")
+                    .foregroundStyle(.secondary)
 
                 TextField(
                     "例：孫に写真を送りたい",
-                    text: $model.request
+                    text: $model.goal
                 )
                 .textFieldStyle(.roundedBorder)
+                .padding(.horizontal)
 
-                Button("開始") {
-
+                Button {
                     model.start()
+                } label: {
+                    Text(model.isRunning ? "支援中" : "支援を開始")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .padding()
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(model.isRunning)
-            }
+                .padding(.horizontal)
 
-            VStack(
-                alignment: .leading,
-                spacing: 10
-            ) {
+                VStack(alignment: .leading, spacing: 10) {
 
-                Label(
-                    model.status,
-                    systemImage: "sparkles"
-                )
+                    Text("状態")
+                        .font(.headline)
 
-                Label(
-                    model.captureStatus,
-                    systemImage:
-                        "rectangle.inset.filled.and.person.filled"
-                )
+                    Text("支援：\(model.isRunning ? "実行中" : "停止")")
+                    Text("画面：\(model.captureStatus)")
+                    Text("通知：\(model.notificationStatus)")
 
-                Label(
-                    model.notificationStatus,
-                    systemImage: "bell"
-                )
+                    Divider()
 
-                if !model.lastOCR.isEmpty {
+                    Text("最後に認識した画面")
+                        .font(.headline)
 
-                    Text(
-                        "直近のOCR：\(model.lastOCR.prefix(180))"
-                    )
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(6)
+                    ScrollView {
+                        Text(
+                            model.lastOCR.isEmpty
+                            ? "まだ画面を認識していません"
+                            : model.lastOCR
+                        )
+                        .frame(
+                            maxWidth: .infinity,
+                            alignment: .leading
+                        )
+                    }
+                    .frame(maxHeight: 180)
                 }
+                .padding()
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                Spacer()
             }
-            .frame(
-                maxWidth: .infinity,
-                alignment: .leading
-            )
-            .padding()
-            .background(
-                Color(.secondarySystemBackground)
-            )
-            .clipShape(
-                RoundedRectangle(
-                    cornerRadius: 16
-                )
-            )
-
-            if model.isRunning {
-
-                Button("支援を停止") {
-
-                    model.stop()
-                }
-                .buttonStyle(.bordered)
-                .tint(.red)
-            }
-
-            Text(
-                "この版はiOS 27+のScreenCaptureKitを使う実証プロトタイプです。"
-            )
-            .font(.caption)
-            .foregroundStyle(.secondary)
-
-            Spacer()
+            .padding(.top)
+            .navigationTitle("よりそいAI")
         }
-        .padding(24)
     }
 }
+```
