@@ -2,6 +2,7 @@ import SwiftUI
 
 @main
 struct YorisoiAIApp: App {
+
     @StateObject private var model = SupportModel()
 
     var body: some Scene {
@@ -17,76 +18,87 @@ struct YorisoiAIApp: App {
 @MainActor
 final class SupportModel: ObservableObject {
 
-    @Published var goal: String = ""
+    @Published var recipient: String = ""
+    @Published var message: String = ""
+
     @Published var isRunning: Bool = false
 
     @Published var captureStatus: String = "待機中"
     @Published var lastOCR: String = ""
     @Published var notificationStatus: String = "通知確認中"
+    @Published var currentInstruction: String = ""
 
     private let capture = ScreenCaptureCoordinator()
     private let notifications = NotificationCoordinator()
     private let planner = InstructionPlanner()
 
     private var plan: [InstructionStep] = []
+
     private var currentStepIndex: Int = 0
 
-    // 現在のステップがOCRで何回連続一致したか
+    // 連続一致回数
     private var keywordMatchCount: Int = 0
 
     // 最後にステップが進んだ時刻
     private var lastProgressDate: Date = Date()
 
-    // 現在のステップを再通知した回数
+    // 再通知回数
     private var reminderCount: Int = 0
 
-    // 再通知までの時間
-    private let reminderInterval: TimeInterval = 8
+    // 再通知間隔
+    private let reminderInterval: TimeInterval = 10
 
     // 連続一致が必要な回数
-    private let requiredMatchCount: Int = 2
+    private let requiredConsecutiveMatches: Int = 2
+
+    // 通知直後のOCR誤判定防止
+    private var notificationIgnoreUntil: Date = .distantPast
+
+    private let notificationIgnoreInterval: TimeInterval = 4
+
+    // MARK: - Init
 
     init() {
 
-        // OCRを受け取った時
         capture.onOCR = { [weak self] text in
             Task { @MainActor in
                 self?.processOCR(text)
             }
         }
 
-        // キャプチャ状態が変わった時
         capture.onStatus = { [weak self] status in
             Task { @MainActor in
                 self?.captureStatus = status
             }
         }
 
-        // 画面キャプチャ開始成功
         capture.onCaptureStarted = { [weak self] in
+
             Task { @MainActor in
-                guard let self else { return }
+
+                guard let self else {
+                    return
+                }
 
                 self.captureStatus = "画面解析中"
 
-                // 最初の案内をすぐ通知
                 if !self.plan.isEmpty {
                     await self.sendCurrentInstruction()
                 }
             }
         }
 
-        // 通知状態を確認
         Task { @MainActor in
             await self.checkNotificationStatus()
         }
     }
 
-    // MARK: - Notification
+    // MARK: - Notification Status
 
     private func checkNotificationStatus() async {
 
-        let granted = await notifications.requestPermission()
+        let granted =
+            await notifications.requestPermission()
 
         if granted {
             notificationStatus = "通知ON"
@@ -99,27 +111,63 @@ final class SupportModel: ObservableObject {
 
     func start() {
 
-        let trimmedGoal = goal.trimmingCharacters(
-            in: .whitespacesAndNewlines
-        )
+        let cleanRecipient =
+            recipient.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            )
 
-        guard !trimmedGoal.isEmpty else {
-            notificationStatus = "やりたいことを入力してください"
+        let cleanMessage =
+            message.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            )
+
+        guard !cleanRecipient.isEmpty else {
+
+            notificationStatus =
+                "送る相手を入力してください"
+
+            return
+        }
+
+        guard !cleanMessage.isEmpty else {
+
+            notificationStatus =
+                "送る文章を入力してください"
+
             return
         }
 
         Task { @MainActor in
-            await startAsync()
+
+            await startAsync(
+                recipient: cleanRecipient,
+                message: cleanMessage
+            )
         }
     }
 
-    private func startAsync() async {
+    // MARK: - Start Async
 
-        // 支援プランを作成
-        plan = planner.makePlan(for: goal)
+    private func startAsync(
+        recipient: String,
+        message: String
+    ) async {
+
+        // ---------------------------------------------
+        // Teams専用の支援プランを作成
+        // ---------------------------------------------
+
+        plan =
+            planner.makePlan(
+                recipient: recipient,
+                message: message
+            )
 
         guard !plan.isEmpty else {
-            notificationStatus = "支援内容を作成できませんでした"
+
+            notificationStatus =
+                "支援内容を作成できませんでした"
+
             return
         }
 
@@ -129,26 +177,39 @@ final class SupportModel: ObservableObject {
         reminderCount = 0
         lastProgressDate = Date()
 
-        // 通知権限を確認
-        let granted = await notifications.requestPermission()
+        currentInstruction =
+            plan[0].message
+
+        // 通知許可
+        let granted =
+            await notifications.requestPermission()
 
         guard granted else {
-            notificationStatus = "通知OFF"
+
+            notificationStatus =
+                "通知OFF"
+
             isRunning = false
+
             return
         }
 
         notificationStatus = "通知ON"
-        isRunning = true
-        captureStatus = "画面取得を開始しています"
 
-        // 画面キャプチャ開始
+        isRunning = true
+
+        captureStatus =
+            "画面取得を開始しています"
+
+        // キャプチャ開始
         capture.startFullDisplayCapture()
     }
 
     // MARK: - OCR Processing
 
-    private func processOCR(_ text: String) {
+    private func processOCR(
+        _ text: String
+    ) {
 
         guard isRunning else {
             return
@@ -160,39 +221,104 @@ final class SupportModel: ObservableObject {
             return
         }
 
-        let step = plan[currentStepIndex]
+        // ---------------------------------------------
+        // 通知そのものをOCRして誤判定しない
+        // ---------------------------------------------
 
-        let normalizedOCR = normalize(text)
-        let normalizedKeyword = normalize(step.detectKeyword)
+        if Date() < notificationIgnoreUntil {
 
-        print("================================")
-        print("🔎 OCR:")
-        print(text)
-        print("🎯 現在のステップ:")
-        print(step.message)
-        print("🔑 判定キーワード:")
-        print(step.detectKeyword)
-        print("================================")
+            print(
+                "⏸️ 通知直後なのでOCR判定を停止"
+            )
 
-        // キーワードが設定されていない場合
-        guard !normalizedKeyword.isEmpty else {
-            checkReminder()
             return
         }
 
-        // OCR文字列の中にキーワードがあるか
-        let matched = normalizedOCR.contains(normalizedKeyword)
+        let step =
+            plan[currentStepIndex]
 
-        if matched {
+        // ---------------------------------------------
+        // 手動完了ステップ
+        //
+        // 最後の送信案内など。
+        // 通知を出したら自動判定しない。
+        // ---------------------------------------------
+
+        if step.manualFinish {
+
+            print(
+                "🛑 手動完了ステップのため自動判定しません"
+            )
+
+            return
+        }
+
+        let normalizedOCR =
+            normalize(text)
+
+        print("================================")
+        print("🔎 OCR")
+        print(text)
+        print("🎯 現在の案内")
+        print(step.message)
+        print("🔑 検出候補")
+        print(step.detectKeywords)
+        print("================================")
+
+        // キーワードなし
+        if step.detectKeywords.isEmpty {
+
+            checkReminder()
+
+            return
+        }
+
+        // ---------------------------------------------
+        // 候補文字をチェック
+        // ---------------------------------------------
+
+        var matchedKeywords: [String] = []
+
+        for keyword in step.detectKeywords {
+
+            let normalizedKeyword =
+                normalize(keyword)
+
+            guard !normalizedKeyword.isEmpty else {
+                continue
+            }
+
+            if normalizedOCR.contains(
+                normalizedKeyword
+            ) {
+
+                matchedKeywords.append(
+                    keyword
+                )
+            }
+        }
+
+        let matchCount =
+            matchedKeywords.count
+
+        print(
+            "🔍 一致数: \(matchCount)/\(step.minimumMatches)"
+        )
+
+        // ---------------------------------------------
+        // 一致
+        // ---------------------------------------------
+
+        if matchCount >= step.minimumMatches {
 
             keywordMatchCount += 1
 
             print(
-                "✅ キーワード一致: \(keywordMatchCount)/\(requiredMatchCount)"
+                "✅ 画面条件一致 \(keywordMatchCount)/\(requiredConsecutiveMatches)"
             )
 
-            // 2回連続一致で次へ
-            if keywordMatchCount >= requiredMatchCount {
+            if keywordMatchCount
+                >= requiredConsecutiveMatches {
 
                 keywordMatchCount = 0
                 reminderCount = 0
@@ -201,14 +327,20 @@ final class SupportModel: ObservableObject {
                 advanceToNextStep()
             }
 
-        } else {
+        }
 
-            // 一致しなければ連続一致をリセット
+        // ---------------------------------------------
+        // 不一致
+        // ---------------------------------------------
+
+        else {
+
             keywordMatchCount = 0
 
-            print("❌ キーワード不一致")
+            print(
+                "❌ 画面条件不一致"
+            )
 
-            // 一定時間進まなければ再通知
             checkReminder()
         }
     }
@@ -219,32 +351,24 @@ final class SupportModel: ObservableObject {
 
         currentStepIndex += 1
 
-        // すべて完了
+        // ---------------------------------------------
+        // 全ステップ完了
+        // ---------------------------------------------
+
         if currentStepIndex >= plan.count {
 
-            isRunning = false
+            finishSupport()
 
-            capture.stop()
-
-            captureStatus = "支援完了"
-
-            Task { @MainActor in
-                await notifications.send(
-                    title: "よりそいAI",
-                    body: "ミッション達成です。お疲れさまでした。"
-                )
-            }
-
-            print("🎉 ミッション達成")
             return
         }
 
-        // 次のステップの時間を更新
-        lastProgressDate = Date()
-        reminderCount = 0
         keywordMatchCount = 0
+        reminderCount = 0
+        lastProgressDate = Date()
 
-        // 次の案内
+        currentInstruction =
+            plan[currentStepIndex].message
+
         Task { @MainActor in
             await sendCurrentInstruction()
         }
@@ -258,19 +382,54 @@ final class SupportModel: ObservableObject {
             return
         }
 
-        let step = plan[currentStepIndex]
+        let step =
+            plan[currentStepIndex]
 
-        notificationStatus = "案内を送信中"
+        currentInstruction =
+            step.message
+
+        notificationIgnoreUntil =
+            Date().addingTimeInterval(
+                notificationIgnoreInterval
+            )
+
+        lastProgressDate =
+            Date()
+
+        notificationStatus =
+            "案内を送信中"
 
         await notifications.send(
             title: "よりそいAI",
             body: step.message
         )
 
-        notificationStatus = "通知送信済み"
+        notificationStatus =
+            "通知送信済み"
 
-        print("📣 案内通知:")
-        print(step.message)
+        print(
+            "📣 通知: \(step.message)"
+        )
+
+        // ---------------------------------------------
+        // 最後の送信ステップ
+        //
+        // ここで支援を終了。
+        // OCRが「送信」を拾って勝手に
+        // ミッション達成しないようにする。
+        // ---------------------------------------------
+
+        if step.manualFinish {
+
+            isRunning = false
+
+            captureStatus =
+                "送信操作を待っています"
+
+            print(
+                "🛑 最終案内を送信。自動判定を終了"
+            )
+        }
     }
 
     // MARK: - Reminder
@@ -285,62 +444,112 @@ final class SupportModel: ObservableObject {
             return
         }
 
-        let now = Date()
+        let step =
+            plan[currentStepIndex]
 
-        // 8秒経過していない場合は何もしない
-        guard now.timeIntervalSince(lastProgressDate)
-                >= reminderInterval else {
+        // 手動完了ステップには再通知しない
+        if step.manualFinish {
             return
         }
 
-        // 1ステップ最大3回まで再通知
-        guard reminderCount < 3 else {
+        // 通知直後は再通知しない
+        if Date() < notificationIgnoreUntil {
+            return
+        }
+
+        let now =
+            Date()
+
+        guard now.timeIntervalSince(
+            lastProgressDate
+        ) >= reminderInterval else {
+            return
+        }
+
+        // 1ステップ最大2回
+        guard reminderCount < 2 else {
             return
         }
 
         reminderCount += 1
         lastProgressDate = now
 
+        notificationIgnoreUntil =
+            Date().addingTimeInterval(
+                notificationIgnoreInterval
+            )
+
         Task { @MainActor in
-
-            guard self.currentStepIndex < self.plan.count else {
-                return
-            }
-
-            let step = self.plan[self.currentStepIndex]
 
             await self.notifications.send(
                 title: "よりそいAI",
-                body: "もう一度ご案内します。\n\(step.message)"
+                body:
+                    "もう一度ご案内します。\n\(step.message)"
             )
 
-            self.notificationStatus = "案内を再通知しました"
+            self.notificationStatus =
+                "案内を再通知しました"
 
             print(
-                "🔁 再通知 \(self.reminderCount)/3"
+                "🔁 再通知 \(self.reminderCount)/2"
             )
-
-            print(step.message)
         }
     }
 
-    // MARK: - Normalize OCR
+    // MARK: - Finish
 
-    private func normalize(_ text: String) -> String {
+    private func finishSupport() {
 
-        let lowercased = text.lowercased()
+        isRunning = false
 
-        let ignoredCharacters = CharacterSet(
-            charactersIn:
-                " \n\r\t　。、．，！？!?.,:：;；「」『』（）()[]［］【】"
-        )
+        capture.stop()
 
-        let scalars = lowercased.unicodeScalars.filter {
-            !ignoredCharacters.contains($0)
+        currentInstruction =
+            "支援が完了しました"
+
+        captureStatus =
+            "支援完了"
+
+        notificationIgnoreUntil =
+            .distantFuture
+
+        Task { @MainActor in
+
+            await notifications.send(
+                title: "よりそいAI",
+                body: "支援が完了しました。"
+            )
         }
 
+        print(
+            "🎉 支援完了"
+        )
+    }
+
+    // MARK: - Normalize
+
+    private func normalize(
+        _ text: String
+    ) -> String {
+
+        let lowercased =
+            text.lowercased()
+
+        let ignoredCharacters =
+            CharacterSet(
+                charactersIn:
+                    " \n\r\t　。、．，！？!?.,:：;；「」『』（）()[]［］【】"
+            )
+
+        let scalars =
+            lowercased.unicodeScalars.filter {
+                !ignoredCharacters.contains($0)
+            }
+
         return String(
-            String.UnicodeScalarView(scalars)
+            String.UnicodeScalarView(
+                scalars
+            )
         )
     }
 }
@@ -349,95 +558,167 @@ final class SupportModel: ObservableObject {
 
 struct ContentView: View {
 
-    @EnvironmentObject var model: SupportModel
+    @EnvironmentObject var model:
+        SupportModel
 
     var body: some View {
 
         NavigationStack {
 
-            VStack(spacing: 20) {
+            ScrollView {
 
-                Text("よりそいAI")
-                    .font(.largeTitle)
-                    .fontWeight(.bold)
+                VStack(spacing: 18) {
 
-                Text("スマートフォン操作をお手伝いします")
+                    Text("よりそいAI")
+                        .font(.largeTitle)
+                        .fontWeight(.bold)
+
+                    Text(
+                        "Teamsでメッセージを送るお手伝い"
+                    )
                     .foregroundStyle(.secondary)
 
-                TextField(
-                    "例：孫に写真を送りたい",
-                    text: $model.goal
-                )
-                .textFieldStyle(.roundedBorder)
-                .padding(.horizontal)
+                    // -----------------------------------------
+                    // 相手
+                    // -----------------------------------------
 
-                Button {
+                    VStack(
+                        alignment: .leading,
+                        spacing: 8
+                    ) {
 
-                    model.start()
+                        Text("送る相手")
+                            .font(.headline)
 
-                } label: {
-
-                    Text(
-                        model.isRunning
-                        ? "支援中"
-                        : "支援を開始"
-                    )
-                    .font(.headline)
-                    .frame(maxWidth: .infinity)
-                    .padding()
-                }
-                .buttonStyle(.borderedProminent)
-                .padding(.horizontal)
-
-                VStack(
-                    alignment: .leading,
-                    spacing: 10
-                ) {
-
-                    Text("状態")
-                        .font(.headline)
-
-                    Text(
-                        "支援：\(model.isRunning ? "実行中" : "停止")"
-                    )
-
-                    Text(
-                        "画面：\(model.captureStatus)"
-                    )
-
-                    Text(
-                        "通知：\(model.notificationStatus)"
-                    )
-
-                    Divider()
-
-                    Text("最後に認識した画面")
-                        .font(.headline)
-
-                    ScrollView {
-
-                        Text(
-                            model.lastOCR.isEmpty
-                            ? "まだ画面を認識していません"
-                            : model.lastOCR
+                        TextField(
+                            "例：田中さん",
+                            text: $model.recipient
                         )
-                        .frame(
-                            maxWidth: .infinity,
-                            alignment: .leading
+                        .textFieldStyle(
+                            .roundedBorder
                         )
                     }
-                    .frame(maxHeight: 180)
-                }
-                .padding()
-                .frame(
-                    maxWidth: .infinity,
-                    alignment: .leading
-                )
+                    .padding(.horizontal)
 
-                Spacer()
+                    // -----------------------------------------
+                    // 文章
+                    // -----------------------------------------
+
+                    VStack(
+                        alignment: .leading,
+                        spacing: 8
+                    ) {
+
+                        Text("送る文章")
+                            .font(.headline)
+
+                        TextField(
+                            "例：こんにちは！元気ですか？",
+                            text: $model.message,
+                            axis: .vertical
+                        )
+                        .lineLimit(
+                            3...6
+                        )
+                        .textFieldStyle(
+                            .roundedBorder
+                        )
+                    }
+                    .padding(.horizontal)
+
+                    // -----------------------------------------
+                    // スタート
+                    // -----------------------------------------
+
+                    Button {
+
+                        model.start()
+
+                    } label: {
+
+                        Text(
+                            model.isRunning
+                            ? "支援中"
+                            : "支援を開始"
+                        )
+                        .font(.headline)
+                        .frame(
+                            maxWidth: .infinity
+                        )
+                        .padding()
+                    }
+                    .buttonStyle(
+                        .borderedProminent
+                    )
+                    .padding(.horizontal)
+
+                    // -----------------------------------------
+                    // 状態
+                    // -----------------------------------------
+
+                    VStack(
+                        alignment: .leading,
+                        spacing: 10
+                    ) {
+
+                        Text("状態")
+                            .font(.headline)
+
+                        Text(
+                            "支援：\(model.isRunning ? "実行中" : "停止")"
+                        )
+
+                        Text(
+                            "画面：\(model.captureStatus)"
+                        )
+
+                        Text(
+                            "通知：\(model.notificationStatus)"
+                        )
+
+                        Divider()
+
+                        Text("現在の案内")
+                            .font(.headline)
+
+                        Text(
+                            model.currentInstruction.isEmpty
+                            ? "まだありません"
+                            : model.currentInstruction
+                        )
+
+                        Divider()
+
+                        Text("最後に認識した画面")
+                            .font(.headline)
+
+                        ScrollView {
+
+                            Text(
+                                model.lastOCR.isEmpty
+                                ? "まだ画面を認識していません"
+                                : model.lastOCR
+                            )
+                            .frame(
+                                maxWidth: .infinity,
+                                alignment: .leading
+                            )
+                        }
+                        .frame(
+                            maxHeight: 180
+                        )
+                    }
+                    .padding()
+                    .frame(
+                        maxWidth: .infinity,
+                        alignment: .leading
+                    )
+                }
+                .padding(.top)
             }
-            .padding(.top)
-            .navigationTitle("よりそいAI")
+            .navigationTitle(
+                "よりそいAI"
+            )
         }
     }
 }
