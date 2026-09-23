@@ -32,7 +32,6 @@ final class ScreenCaptureCoordinator: NSObject,
         qos: .userInitiated
     )
 
-    // PickerのObserverを登録済みか
     private var pickerObserverAdded = false
 
     // OCRの最後の実行時刻
@@ -54,6 +53,9 @@ final class ScreenCaptureCoordinator: NSObject,
         if pickerObserverAdded {
             picker.remove(self)
         }
+
+        // Pickerを無効化
+        picker.isActive = false
 
         print("🛑 ScreenCaptureCoordinator 解放")
     }
@@ -78,6 +80,10 @@ final class ScreenCaptureCoordinator: NSObject,
                 return
             }
 
+            print("================================")
+            print("📱 画面キャプチャ開始")
+            print("================================")
+
             self.onStatus?(
                 "📱 画面共有を準備しています"
             )
@@ -92,15 +98,16 @@ final class ScreenCaptureCoordinator: NSObject,
             // マイクは使わない
             configuration.showsMicrophoneControl = false
 
-            // ------------------------------------------------
-            // 2. Picker設定を登録
-            // ------------------------------------------------
+            // カメラも使わない
+            configuration.showsCameraControl = false
 
             self.picker.defaultConfiguration =
                 configuration
 
+            print("✅ Picker configuration 設定完了")
+
             // ------------------------------------------------
-            // 3. Observer登録
+            // 2. Observer登録
             // ------------------------------------------------
 
             if !self.pickerObserverAdded {
@@ -109,24 +116,36 @@ final class ScreenCaptureCoordinator: NSObject,
                 self.pickerObserverAdded = true
 
                 print(
-                    "✅ ScreenCapturePicker Observer 登録"
+                    "✅ Picker Observer 登録完了"
                 )
             }
 
             // ------------------------------------------------
-            // 4. 全画面Pickerを表示
+            // 3. Pickerを有効化
             // ------------------------------------------------
 
+            self.picker.isActive = true
+
             print(
-                "📱 全画面共有Pickerを表示します"
+                "✅ Picker isActive = true"
             )
+
+            // ------------------------------------------------
+            // 4. 全画面共有Picker表示
+            // ------------------------------------------------
 
             self.onStatus?(
                 "📱 画面共有の選択画面を開いています"
             )
 
-            self.picker.present(
-                using: .display
+            print(
+                "📱 Picker.present() を実行"
+            )
+
+            self.picker.present()
+
+            print(
+                "✅ Picker.present() 呼び出し完了"
             )
         }
     }
@@ -136,6 +155,8 @@ final class ScreenCaptureCoordinator: NSObject,
     func stop() {
 
         guard let currentStream = stream else {
+
+            picker.isActive = false
 
             onStatus?(
                 "待機中"
@@ -154,6 +175,8 @@ final class ScreenCaptureCoordinator: NSObject,
 
                 await MainActor.run {
 
+                    self.picker.isActive = false
+
                     self.onStatus?(
                         "停止しました"
                     )
@@ -166,6 +189,8 @@ final class ScreenCaptureCoordinator: NSObject,
             } catch {
 
                 await MainActor.run {
+
+                    self.picker.isActive = false
 
                     self.onStatus?(
                         "⚠️ 停止エラー: \(error.localizedDescription)"
@@ -180,9 +205,6 @@ final class ScreenCaptureCoordinator: NSObject,
     }
 
     // MARK: - Picker Observer
-    //
-    // ユーザーが「画面全体」を選択したあとに呼ばれる
-    //
 
     func contentSharingPicker(
         _ picker: SCContentSharingPicker,
@@ -190,9 +212,9 @@ final class ScreenCaptureCoordinator: NSObject,
         for stream: SCStream?
     ) {
 
-        print(
-            "✅ ScreenCaptureKit: 共有対象を取得しました"
-        )
+        print("================================")
+        print("✅ Pickerから共有対象を受信")
+        print("================================")
 
         DispatchQueue.main.async { [weak self] in
 
@@ -201,7 +223,7 @@ final class ScreenCaptureCoordinator: NSObject,
             )
         }
 
-        // 古いStreamがあれば停止
+        // 既存ストリーム停止
         if let oldStream = self.stream {
 
             Task {
@@ -221,7 +243,7 @@ final class ScreenCaptureCoordinator: NSObject,
             self.stream = nil
         }
 
-        // 新しいStreamを開始
+        // 新しいストリーム開始
         startStream(
             with: filter
         )
@@ -274,12 +296,10 @@ final class ScreenCaptureCoordinator: NSObject,
             "▶️ SCStreamを作成します"
         )
 
-        var configuration =
+        // iOSではMac専用の
+        // pixelFormatなどを設定しない
+        let configuration =
             SCStreamConfiguration()
-
-        // iOSではmacOS専用の
-        // pixelFormat / queueDepth / minimumFrameInterval
-        // を設定しない
 
         let newStream = SCStream(
             filter: filter,
@@ -289,7 +309,7 @@ final class ScreenCaptureCoordinator: NSObject,
 
         do {
 
-            // 画面フレームを受信
+            // 画面フレーム受信
             try newStream.addStreamOutput(
                 self,
                 type: .screen,
@@ -399,7 +419,7 @@ final class ScreenCaptureCoordinator: NSObject,
 
         let now = Date()
 
-        // OCR間隔
+        // OCRしすぎない
         guard now.timeIntervalSince(lastOCRTime)
                 >= ocrInterval
         else {
@@ -408,7 +428,7 @@ final class ScreenCaptureCoordinator: NSObject,
 
         lastOCRTime = now
 
-        // OCR実行
+        // OCRを別キューで実行
         visionQueue.async { [weak self] in
 
             guard let self else {
@@ -442,7 +462,7 @@ final class ScreenCaptureCoordinator: NSObject,
                 return
             }
 
-            // エラー
+            // OCRエラー
             if let error {
 
                 print(
@@ -459,7 +479,7 @@ final class ScreenCaptureCoordinator: NSObject,
                 return
             }
 
-            // 結果
+            // OCR結果
             guard let observations =
                     request.results
                     as? [VNRecognizedTextObservation]
@@ -542,7 +562,7 @@ final class ScreenCaptureCoordinator: NSObject,
         // 高精度OCR
         request.recognitionLevel = .accurate
 
-        // 日本語・英語
+        // 日本語 + 英語
         request.recognitionLanguages = [
             "ja-JP",
             "en-US"
@@ -570,8 +590,7 @@ final class ScreenCaptureCoordinator: NSObject,
         ]
 
         // 小さすぎる文字を除外
-        request.minimumTextHeight =
-            0.012
+        request.minimumTextHeight = 0.012
 
         // Visionへ渡す
         let handler =
