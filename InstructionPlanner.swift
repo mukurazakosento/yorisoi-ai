@@ -1,3 +1,4 @@
+```swift
 import Foundation
 
 struct InstructionStep: Identifiable {
@@ -6,7 +7,9 @@ struct InstructionStep: Identifiable {
 
     let message: String
 
-    let keywordGroups: [[String]]
+    let detectKeywords: [String]
+
+    let minimumMatches: Int
 
     let manualFinish: Bool
 }
@@ -28,8 +31,9 @@ final class InstructionPlanner {
             return [
                 InstructionStep(
                     message:
-                        "現在はTeamsの支援に対応しています。「Teamsで○○さんにメッセージを送りたい」と入力してください。",
-                    keywordGroups: [],
+                        "現在はTeamsの支援に対応しています。「Teamsで田中さんにメッセージを送りたい」のように入力してください。",
+                    detectKeywords: [],
+                    minimumMatches: 0,
                     manualFinish: true
                 )
             ]
@@ -46,39 +50,70 @@ final class InstructionPlanner {
                 InstructionStep(
                     message:
                         "送る相手の名前を入れてください。例：「Teamsで田中さんにメッセージを送りたい」",
-                    keywordGroups: [],
+                    detectKeywords: [],
+                    minimumMatches: 0,
                     manualFinish: true
                 )
             ]
         }
 
+        // --------------------------------------------------------
+        // STEP 0
+        // 「Teamsを開いてください」
+        //
+        // ★ここはTeamsだけを見ればよい
+        // 「チャット」などを同時に要求しない
+        // --------------------------------------------------------
+
         let step1 =
             InstructionStep(
                 message:
-                    "Teamsを開いてください.",
-                keywordGroups: [
-                    ["Teams"],
-                    ["チャット", "アクティビティ", "チーム"]
+                    "Teamsを開いてください。",
+                detectKeywords: [
+                    "Teams",
+                    "Microsoft Teams"
                 ],
+                minimumMatches: 1,
                 manualFinish: false
             )
+
+        // --------------------------------------------------------
+        // STEP 1
+        // 相手のチャットを開いてもらう
+        //
+        // 相手の名前 + チャット系ワード
+        // のどちらか一方だけでもOCR揺れに対応できるよう、
+        // 最低1個で判定する
+        //
+        // 実際のチャット画面になったかは
+        // 「画面変更 + 連続一致」で確認する
+        // --------------------------------------------------------
 
         let step2 =
             InstructionStep(
                 message:
                     "「\(recipient)」さんのチャットを開いてください。",
-                keywordGroups: [
-                    [recipient],
-                    ["チャット", "メッセージ"]
+                detectKeywords: [
+                    recipient,
+                    "チャット",
+                    "メッセージ",
+                    "Chat"
                 ],
+                minimumMatches: 1,
                 manualFinish: false
             )
+
+        // --------------------------------------------------------
+        // STEP 2
+        // 最後は手動
+        // --------------------------------------------------------
 
         let step3 =
             InstructionStep(
                 message:
                     "メッセージ入力欄を押して、送りたい文章を入力してください。入力したら「送信」を押してください。",
-                keywordGroups: [],
+                detectKeywords: [],
+                minimumMatches: 0,
                 manualFinish: true
             )
 
@@ -113,7 +148,6 @@ final class InstructionPlanner {
                 continue
             }
 
-            // ① テキスト全体を検索するためのRange
             let textRange =
                 NSRange(
                     text.startIndex..<text.endIndex,
@@ -133,7 +167,6 @@ final class InstructionPlanner {
                 continue
             }
 
-            // ② 相手の名前部分のRange
             let recipientRange =
                 match.range(
                     at: 1
@@ -200,3 +233,4 @@ final class InstructionPlanner {
         )
     }
 }
+```
