@@ -18,8 +18,8 @@ struct YorisoiAIApp: App {
 @MainActor
 final class SupportModel: ObservableObject {
 
-    @Published var recipient: String = ""
-    @Published var message: String = ""
+    // 支援内容はこれ1つだけ
+    @Published var supportContent: String = ""
 
     @Published var isRunning: Bool = false
 
@@ -33,13 +33,12 @@ final class SupportModel: ObservableObject {
     private let planner = InstructionPlanner()
 
     private var plan: [InstructionStep] = []
-
     private var currentStepIndex: Int = 0
 
     // 同じ画面を連続して確認した回数
     private var screenMatchCount: Int = 0
 
-    // 画面条件が一致するために必要な連続回数
+    // 2回確認してから次へ
     private let requiredStableMatches: Int = 2
 
     // 通知直後の誤判定防止
@@ -47,17 +46,14 @@ final class SupportModel: ObservableObject {
 
     private let notificationIgnoreInterval: TimeInterval = 4
 
-    // 最後に同じ案内を通知した時刻
+    // 同じ案内を連続で送らない
     private var lastNotificationDate: Date = .distantPast
 
-    // 同じ案内を連続通知しないための間隔
-    // 「この時間が経ったら通知する」用途ではない
     private let notificationCooldown: TimeInterval = 8
-
-    // MARK: - Init
 
     init() {
 
+        // OCR
         capture.onOCR = { [weak self] text in
 
             Task { @MainActor [weak self] in
@@ -70,6 +66,7 @@ final class SupportModel: ObservableObject {
             }
         }
 
+        // キャプチャ状態
         capture.onStatus = { [weak self] status in
 
             Task { @MainActor [weak self] in
@@ -78,6 +75,7 @@ final class SupportModel: ObservableObject {
             }
         }
 
+        // キャプチャ開始
         capture.onCaptureStarted = { [weak self] in
 
             Task { @MainActor [weak self] in
@@ -86,17 +84,18 @@ final class SupportModel: ObservableObject {
                     return
                 }
 
-                // キャプチャ開始時には通知しない
-                // 必ず最初のOCRを待つ
                 self.captureStatus =
                     "画面を確認しています"
 
+                // ★ここでは通知しない
+                // 実際の画面を確認してから通知する
                 print(
-                    "🔍 キャプチャ開始 → OCR待機"
+                    "🔍 キャプチャ開始 → 最初の画面確認"
                 )
             }
         }
 
+        // 通知権限
         Task { @MainActor [weak self] in
 
             guard let self else {
@@ -130,28 +129,15 @@ final class SupportModel: ObservableObject {
 
     func start() {
 
-        let cleanRecipient =
-            recipient.trimmingCharacters(
+        let content =
+            supportContent.trimmingCharacters(
                 in: .whitespacesAndNewlines
             )
 
-        let cleanMessage =
-            message.trimmingCharacters(
-                in: .whitespacesAndNewlines
-            )
-
-        guard !cleanRecipient.isEmpty else {
+        guard !content.isEmpty else {
 
             notificationStatus =
-                "送る相手を入力してください"
-
-            return
-        }
-
-        guard !cleanMessage.isEmpty else {
-
-            notificationStatus =
-                "送る文章を入力してください"
+                "支援内容を入力してください"
 
             return
         }
@@ -163,8 +149,7 @@ final class SupportModel: ObservableObject {
             }
 
             await self.startAsync(
-                recipient: cleanRecipient,
-                message: cleanMessage
+                supportContent: content
             )
         }
     }
@@ -172,15 +157,13 @@ final class SupportModel: ObservableObject {
     // MARK: - Start Async
 
     private func startAsync(
-        recipient: String,
-        message: String
+        supportContent: String
     ) async {
 
-        // Teams専用プラン
+        // 支援内容から支援手順を作成
         plan =
             planner.makePlan(
-                recipient: recipient,
-                message: message
+                for: supportContent
             )
 
         guard !plan.isEmpty else {
@@ -193,7 +176,6 @@ final class SupportModel: ObservableObject {
 
         currentStepIndex = 0
         screenMatchCount = 0
-
         currentInstruction = ""
 
         notificationIgnoreUntil =
@@ -230,10 +212,18 @@ final class SupportModel: ObservableObject {
         )
 
         print(
-            "🎯 最初のステップ: \(plan[0].message)"
+            "📝 支援内容:"
         )
 
-        // 画面キャプチャ開始
+        print(
+            supportContent
+        )
+
+        print(
+            "🎯 ステップ数: \(plan.count)"
+        )
+
+        // キャプチャ開始
         capture.startFullDisplayCapture()
     }
 
@@ -257,9 +247,9 @@ final class SupportModel: ObservableObject {
         let step =
             plan[currentStepIndex]
 
-        // ------------------------------------------------
-        // 通知直後はOCRを使った判定をしない
-        // ------------------------------------------------
+        // ---------------------------------------------
+        // 通知直後
+        // ---------------------------------------------
 
         if Date() < notificationIgnoreUntil {
 
@@ -270,25 +260,21 @@ final class SupportModel: ObservableObject {
             return
         }
 
-        // ------------------------------------------------
-        // 最後の手動操作ステップ
-        // ------------------------------------------------
+        // ---------------------------------------------
+        // 手動終了ステップ
+        // ---------------------------------------------
 
         if step.manualFinish {
 
             print(
-                "🛑 最終ステップなので自動判定しません"
+                "🛑 手動操作ステップのため自動判定しません"
             )
 
             captureStatus =
-                "送信ボタンを押してください"
+                "ユーザーの操作を待っています"
 
             return
         }
-
-        // ------------------------------------------------
-        // OCRを正規化
-        // ------------------------------------------------
 
         let normalizedOCR =
             normalize(text)
@@ -296,7 +282,7 @@ final class SupportModel: ObservableObject {
         guard !normalizedOCR.isEmpty else {
 
             print(
-                "⚠️ OCR結果が空 → まだ通知しない"
+                "⚠️ OCR結果が空"
             )
 
             captureStatus =
@@ -307,21 +293,21 @@ final class SupportModel: ObservableObject {
 
         print("================================")
         print(
-            "🔍 現在のステップ: \(currentStepIndex)"
+            "🔍 現在ステップ: \(currentStepIndex)"
         )
         print(
             "📺 OCR:"
         )
         print(text)
         print(
-            "🎯 必要な画面:"
+            "🎯 判定候補:"
         )
         print(step.detectKeywords)
         print("================================")
 
-        // ------------------------------------------------
-        // 現在の画面が今のステップと合っているか確認
-        // ------------------------------------------------
+        // ---------------------------------------------
+        // 画面一致数
+        // ---------------------------------------------
 
         let matchCount =
             countMatches(
@@ -330,41 +316,32 @@ final class SupportModel: ObservableObject {
             )
 
         print(
-            "🔎 画面一致数: \(matchCount)/\(step.minimumMatches)"
+            "🔎 一致数: \(matchCount)/\(step.minimumMatches)"
         )
 
-        let screenIsCorrect =
-            matchCount >= step.minimumMatches
-
-        // =================================================
-        // A. 画面が違う
+        // ---------------------------------------------
+        // 画面が違う
         //
-        // → 現在の案内を通知する
-        // → ただし連続通知はしない
-        // =================================================
+        // 現在の案内だけを通知する。
+        // ただし連続通知はしない。
+        // ---------------------------------------------
 
-        if !screenIsCorrect {
+        if matchCount < step.minimumMatches {
 
-            screenMatchCount = 0
+            screenMatchCount =
+                0
 
             captureStatus =
-                "画面を確認中"
-
-            print(
-                "❌ 現在のステップと画面が違います"
-            )
+                "画面を確認しています"
 
             sendInstructionIfNeeded()
 
             return
         }
 
-        // =================================================
-        // B. 画面が正しい
-        //
-        // → 2回連続確認する
-        // → 確認できたら次へ
-        // =================================================
+        // ---------------------------------------------
+        // 画面が合っている
+        // ---------------------------------------------
 
         screenMatchCount += 1
 
@@ -372,20 +349,24 @@ final class SupportModel: ObservableObject {
             "画面を確認中 \(screenMatchCount)/\(requiredStableMatches)"
 
         print(
-            "✅ 画面一致 \(screenMatchCount)/\(requiredStableMatches)"
+            "✅ 画面条件一致 \(screenMatchCount)/\(requiredStableMatches)"
         )
 
         guard screenMatchCount >= requiredStableMatches else {
             return
         }
 
+        // ---------------------------------------------
         // 次のステップへ
-        screenMatchCount = 0
+        // ---------------------------------------------
+
+        screenMatchCount =
+            0
 
         advanceToNextStep()
     }
 
-    // MARK: - Screen Match
+    // MARK: - Match Count
 
     private func countMatches(
         ocr: String,
@@ -418,7 +399,7 @@ final class SupportModel: ObservableObject {
         return count
     }
 
-    // MARK: - Send Instruction If Needed
+    // MARK: - Send If Needed
 
     private func sendInstructionIfNeeded() {
 
@@ -433,20 +414,10 @@ final class SupportModel: ObservableObject {
         let now =
             Date()
 
-        // ---------------------------------------------
-        // 同じ案内の連続通知防止
-        //
-        // 時間で「次のステップ」に進むことはない。
-        // ただ同じ通知の連発だけ防止する。
-        // ---------------------------------------------
-
+        // 同じ案内を連続送信しない
         guard now.timeIntervalSince(
             lastNotificationDate
         ) >= notificationCooldown else {
-
-            print(
-                "⏸️ 同じ案内を送ったばかりなので通知しない"
-            )
 
             return
         }
@@ -470,10 +441,7 @@ final class SupportModel: ObservableObject {
 
         currentStepIndex += 1
 
-        // ---------------------------------------------
-        // 全ステップ完了
-        // ---------------------------------------------
-
+        // 全ステップ終了
         guard currentStepIndex < plan.count else {
 
             finishSupport()
@@ -491,16 +459,14 @@ final class SupportModel: ObservableObject {
             nextStep.message
 
         print(
-            "➡️ 次のステップへ: \(nextStep.message)"
+            "➡️ 次のステップ:"
         )
 
-        // ---------------------------------------------
-        // ここが重要
-        //
-        // 「前の画面が正しい」と確認できたので、
-        // 初めて次の案内を通知する
-        // ---------------------------------------------
+        print(
+            nextStep.message
+        )
 
+        // ★前の画面を確認した後で次の通知を送る
         Task { @MainActor [weak self] in
 
             guard let self else {
@@ -525,7 +491,7 @@ final class SupportModel: ObservableObject {
         currentInstruction =
             step.message
 
-        // 通知直後の画面をOCR判定しない
+        // 通知をOCRが読まないようにする
         notificationIgnoreUntil =
             Date().addingTimeInterval(
                 notificationIgnoreInterval
@@ -551,7 +517,7 @@ final class SupportModel: ObservableObject {
         )
 
         // ---------------------------------------------
-        // 最終案内なら自動判定を終了
+        // 最後のステップ
         // ---------------------------------------------
 
         if step.manualFinish {
@@ -563,7 +529,7 @@ final class SupportModel: ObservableObject {
                 "送信ボタンを押してください"
 
             print(
-                "🛑 最終案内で自動判定終了"
+                "🛑 最終案内。ここで自動支援を終了"
             )
         }
     }
@@ -632,60 +598,64 @@ struct ContentView: View {
 
             ScrollView {
 
-                VStack(spacing: 18) {
+                VStack(spacing: 20) {
 
-                    Text("よりそいAI")
-                        .font(.largeTitle)
-                        .fontWeight(.bold)
+                    // -----------------------------------------
+                    // Title
+                    // -----------------------------------------
 
-                    Text(
-                        "Teamsで友達に文章を送るお手伝い"
-                    )
-                    .foregroundStyle(.secondary)
+                    VStack(spacing: 8) {
 
-                    // MARK: 相手
+                        Text("よりそいAI")
+                            .font(.largeTitle)
+                            .fontWeight(.bold)
 
-                    VStack(
-                        alignment: .leading,
-                        spacing: 8
-                    ) {
-
-                        Text("送る相手")
-                            .font(.headline)
-
-                        TextField(
-                            "例：山田さん",
-                            text: $model.recipient
+                        Text(
+                            "やりたいことを入力してください"
                         )
-                        .textFieldStyle(
-                            .roundedBorder
+                        .font(.headline)
+                        .foregroundStyle(
+                            .secondary
                         )
                     }
-                    .padding(.horizontal)
 
-                    // MARK: 文章
+                    // -----------------------------------------
+                    // 支援内容
+                    // -----------------------------------------
 
                     VStack(
                         alignment: .leading,
-                        spacing: 8
+                        spacing: 10
                     ) {
 
-                        Text("送る文章")
+                        Text("支援内容")
                             .font(.headline)
 
+                        Text(
+                            "例：Teamsで田中さんにメッセージを送りたい"
+                        )
+                        .font(.subheadline)
+                        .foregroundStyle(
+                            .secondary
+                        )
+
                         TextField(
-                            "例：こんにちは！元気ですか？",
-                            text: $model.message,
+                            "やりたいことを入力",
+                            text: $model.supportContent,
                             axis: .vertical
                         )
-                        .lineLimit(3...6)
+                        .lineLimit(
+                            3...5
+                        )
                         .textFieldStyle(
                             .roundedBorder
                         )
                     }
                     .padding(.horizontal)
 
-                    // MARK: 開始
+                    // -----------------------------------------
+                    // 開始
+                    // -----------------------------------------
 
                     Button {
 
@@ -709,27 +679,52 @@ struct ContentView: View {
                     )
                     .padding(.horizontal)
 
-                    // MARK: 状態
+                    // -----------------------------------------
+                    // Status
+                    // -----------------------------------------
 
                     VStack(
                         alignment: .leading,
-                        spacing: 10
+                        spacing: 12
                     ) {
 
                         Text("状態")
                             .font(.headline)
 
-                        Text(
-                            "支援：\(model.isRunning ? "実行中" : "停止")"
-                        )
+                        HStack {
 
-                        Text(
-                            "画面：\(model.captureStatus)"
-                        )
+                            Text("支援")
 
-                        Text(
-                            "通知：\(model.notificationStatus)"
-                        )
+                            Spacer()
+
+                            Text(
+                                model.isRunning
+                                ? "実行中"
+                                : "停止"
+                            )
+                        }
+
+                        HStack {
+
+                            Text("画面")
+
+                            Spacer()
+
+                            Text(
+                                model.captureStatus
+                            )
+                        }
+
+                        HStack {
+
+                            Text("通知")
+
+                            Spacer()
+
+                            Text(
+                                model.notificationStatus
+                            )
+                        }
 
                         Divider()
 
@@ -744,7 +739,7 @@ struct ContentView: View {
 
                         Divider()
 
-                        Text("最後に認識した画面")
+                        Text("画面認識")
                             .font(.headline)
 
                         ScrollView {
@@ -760,7 +755,8 @@ struct ContentView: View {
                             )
                         }
                         .frame(
-                            maxHeight: 200
+                            minHeight: 100,
+                            maxHeight: 220
                         )
                     }
                     .padding()
@@ -768,10 +764,25 @@ struct ContentView: View {
                         maxWidth: .infinity,
                         alignment: .leading
                     )
+                    .background(
+                        RoundedRectangle(
+                            cornerRadius: 12
+                        )
+                        .fill(
+                            Color.secondary
+                                .opacity(0.08)
+                        )
+                    )
+                    .padding(.horizontal)
+
+                    Spacer()
                 }
                 .padding(.top)
+                .padding(.bottom, 30)
             }
-            .navigationTitle("よりそいAI")
+            .navigationTitle(
+                "よりそいAI"
+            )
         }
     }
 }
