@@ -1,4 +1,3 @@
-```swift
 import Foundation
 
 struct InstructionStep: Identifiable {
@@ -232,4 +231,4 @@ final class InstructionPlanner {
         )
     }
 }
-```
+
