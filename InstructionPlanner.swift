@@ -5,16 +5,13 @@ struct InstructionStep: Identifiable {
 
     let message: String
 
-    // すべてのグループを満たしたら
-    // 「この画面になった」と判断する
-    //
-    // 例：
-    // [["Teams"], ["チャット", "アクティビティ"]]
-    //
-    // → Teamsがあり、さらにチャットかアクティビティがある
-    let keywordGroups: [[String]]
+    // この候補のうち何個一致したら
+    // 「目的の画面」と判断するか
+    let detectKeywords: [String]
 
-    // このステップを通知したら自動支援を終了するか
+    let minimumMatches: Int
+
+    // trueなら、この通知を出して自動判定終了
     let manualFinish: Bool
 }
 
@@ -28,13 +25,18 @@ final class InstructionPlanner {
         let normalized =
             normalize(supportContent)
 
+        // --------------------------------------------------
+        // Teams支援のみ対応
+        // --------------------------------------------------
+
         guard normalized.contains("teams") else {
 
             return [
                 InstructionStep(
                     message:
-                        "現在はTeamsの支援に対応しています。「Teamsで○○さんにメッセージを送りたい」と入力してください。",
-                    keywordGroups: [],
+                        "現在はTeamsの支援に対応しています。例：「Teamsで田中さんにメッセージを送りたい」",
+                    detectKeywords: [],
+                    minimumMatches: 0,
                     manualFinish: true
                 )
             ]
@@ -51,78 +53,103 @@ final class InstructionPlanner {
                 InstructionStep(
                     message:
                         "送る相手の名前を入れてください。例：「Teamsで田中さんにメッセージを送りたい」",
-                    keywordGroups: [],
+                    detectKeywords: [],
+                    minimumMatches: 0,
                     manualFinish: true
                 )
             ]
         }
 
         // --------------------------------------------------
-        // STEP 1
+        // STEP 0
         // Teamsを開く
+        //
+        // Teamsという文字がOCRで取れない場合もあるので、
+        // Teamsのホーム画面に出やすい文字を候補にする。
+        // どれか1つでOK。
         // --------------------------------------------------
 
-        let step1 =
+        let openTeams =
             InstructionStep(
                 message:
                     "Teamsを開いてください。",
-                keywordGroups: [
-                    [
-                        "Teams"
-                    ],
-                    [
-                        "チャット",
-                        "アクティビティ",
-                        "チーム"
-                    ]
+                detectKeywords: [
+                    "Teams",
+                    "Microsoft Teams",
+                    "チャット",
+                    "アクティビティ",
+                    "チーム",
+                    "予定表"
                 ],
+                minimumMatches: 1,
+                manualFinish: false
+            )
+
+        // --------------------------------------------------
+        // STEP 1
+        // 相手のチャットを開く
+        //
+        // 相手の名前を必須条件にする。
+        // --------------------------------------------------
+
+        let openChat =
+            InstructionStep(
+                message:
+                    "「\(recipient)」さんのチャットを開いてください。",
+                detectKeywords: [
+                    recipient,
+                    "チャット",
+                    "メッセージ"
+                ],
+                minimumMatches: 2,
                 manualFinish: false
             )
 
         // --------------------------------------------------
         // STEP 2
-        // 友達のチャットを開く
+        // メッセージ入力
         // --------------------------------------------------
 
-        let step2 =
+        let inputMessage =
             InstructionStep(
                 message:
-                    "「\(recipient)」さんのチャットを開いてください。",
-                keywordGroups: [
-                    [
-                        recipient
-                    ],
-                    [
-                        "チャット",
-                        "メッセージ"
-                    ]
+                    "メッセージ入力欄を押して、送りたい文章を入力してください。",
+                detectKeywords: [
+                    "メッセージ",
+                    "送信",
+                    "入力",
+                    "新しいメッセージ"
                 ],
+                minimumMatches: 2,
                 manualFinish: false
             )
 
         // --------------------------------------------------
         // STEP 3
-        // メッセージ入力 → 送信
+        // 送信
         //
-        // ここでユーザーに手動操作してもらって終了
+        // ここはユーザーが手動で送信。
+        // 自動で完了させない。
         // --------------------------------------------------
 
-        let step3 =
+        let sendMessage =
             InstructionStep(
                 message:
-                    "メッセージ入力欄を押して、送りたい文章を入力してください。入力したら「送信」を押してください。",
-                keywordGroups: [],
+                    "文章を確認して、「送信」ボタンを押してください。",
+                detectKeywords: [],
+                minimumMatches: 0,
                 manualFinish: true
             )
 
         return [
-            step1,
-            step2,
-            step3
+            openTeams,
+            openChat,
+            inputMessage,
+            sendMessage
         ]
     }
 
-    // MARK: - Recipient
+    // MARK: - Extract Recipient
 
     private func extractRecipient(
         from text: String
@@ -175,14 +202,14 @@ final class InstructionPlanner {
                 continue
             }
 
-            let recipientRange =
+            let range =
                 match.range(
                     at: 1
                 )
 
             guard let swiftRange =
                     Range(
-                        recipientRange,
+                        range,
                         in: text
                     )
             else {
