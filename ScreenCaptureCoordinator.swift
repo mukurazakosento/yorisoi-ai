@@ -3,7 +3,6 @@ import ScreenCaptureKit
 import Vision
 import CoreMedia
 import CoreVideo
-import UIKit
 
 @available(iOS 27.0, *)
 final class ScreenCaptureCoordinator: NSObject,
@@ -23,19 +22,20 @@ final class ScreenCaptureCoordinator: NSObject,
 
     private let picker = SCContentSharingPicker.shared
 
-    // 画面フレーム受信用
     private let captureQueue = DispatchQueue(
         label: "yorisoi.capture.queue",
         qos: .userInitiated
     )
 
-    // OCR処理用
     private let visionQueue = DispatchQueue(
         label: "yorisoi.vision.queue",
         qos: .userInitiated
     )
 
-    // OCR実行時刻
+    // PickerのObserverを登録済みか
+    private var pickerObserverAdded = false
+
+    // OCRの最後の実行時刻
     private var lastOCRTime: Date = .distantPast
 
     // OCR間隔
@@ -46,19 +46,15 @@ final class ScreenCaptureCoordinator: NSObject,
     override init() {
         super.init()
 
-        // iOS 27のAPI
-        picker.add(self)
-
-        // iOSでは追加のPicker設定を行わず、
-        // システムの標準設定を利用する
-        picker.defaultConfiguration =
-            SCContentSharingPickerConfiguration()
-
         print("✅ ScreenCaptureCoordinator 初期化")
     }
 
     deinit {
-        picker.remove(self)
+
+        if pickerObserverAdded {
+            picker.remove(self)
+        }
+
         print("🛑 ScreenCaptureCoordinator 解放")
     }
 
@@ -74,9 +70,11 @@ final class ScreenCaptureCoordinator: NSObject,
 
             // 二重起動防止
             if self.stream != nil {
+
                 self.onStatus?(
                     "⚠️ 画面キャプチャはすでに動いています"
                 )
+
                 return
             }
 
@@ -84,10 +82,52 @@ final class ScreenCaptureCoordinator: NSObject,
                 "📱 画面共有を準備しています"
             )
 
-            // iOSのシステム画面共有ピッカー
-            self.picker.present()
+            // ------------------------------------------------
+            // 1. Picker設定
+            // ------------------------------------------------
 
-            print("📱 SCContentSharingPicker を表示")
+            var configuration =
+                SCContentSharingPickerConfiguration()
+
+            // マイクは使わない
+            configuration.showsMicrophoneControl = false
+
+            // ------------------------------------------------
+            // 2. Picker設定を登録
+            // ------------------------------------------------
+
+            self.picker.defaultConfiguration =
+                configuration
+
+            // ------------------------------------------------
+            // 3. Observer登録
+            // ------------------------------------------------
+
+            if !self.pickerObserverAdded {
+
+                self.picker.add(self)
+                self.pickerObserverAdded = true
+
+                print(
+                    "✅ ScreenCapturePicker Observer 登録"
+                )
+            }
+
+            // ------------------------------------------------
+            // 4. 全画面Pickerを表示
+            // ------------------------------------------------
+
+            print(
+                "📱 全画面共有Pickerを表示します"
+            )
+
+            self.onStatus?(
+                "📱 画面共有の選択画面を開いています"
+            )
+
+            self.picker.present(
+                using: .display
+            )
         }
     }
 
@@ -95,28 +135,38 @@ final class ScreenCaptureCoordinator: NSObject,
 
     func stop() {
 
-        guard let stream else {
-            onStatus?("待機中")
+        guard let currentStream = stream else {
+
+            onStatus?(
+                "待機中"
+            )
+
             return
         }
 
-        self.stream = nil
+        stream = nil
 
         Task {
 
             do {
 
-                try await stream.stopCapture()
+                try await currentStream.stopCapture()
 
                 await MainActor.run {
-                    self.onStatus?("停止しました")
+
+                    self.onStatus?(
+                        "停止しました"
+                    )
                 }
 
-                print("🛑 画面キャプチャ停止")
+                print(
+                    "🛑 画面キャプチャ停止"
+                )
 
             } catch {
 
                 await MainActor.run {
+
                     self.onStatus?(
                         "⚠️ 停止エラー: \(error.localizedDescription)"
                     )
@@ -130,6 +180,9 @@ final class ScreenCaptureCoordinator: NSObject,
     }
 
     // MARK: - Picker Observer
+    //
+    // ユーザーが「画面全体」を選択したあとに呼ばれる
+    //
 
     func contentSharingPicker(
         _ picker: SCContentSharingPicker,
@@ -137,24 +190,30 @@ final class ScreenCaptureCoordinator: NSObject,
         for stream: SCStream?
     ) {
 
-        print("✅ 画面共有対象が選択されました")
+        print(
+            "✅ ScreenCaptureKit: 共有対象を取得しました"
+        )
 
         DispatchQueue.main.async { [weak self] in
+
             self?.onStatus?(
                 "✅ 画面共有対象を取得しました"
             )
         }
 
-        // 古いストリームを停止
+        // 古いStreamがあれば停止
         if let oldStream = self.stream {
 
             Task {
 
                 do {
+
                     try await oldStream.stopCapture()
+
                 } catch {
+
                     print(
-                        "⚠️ 古いストリーム停止エラー: \(error.localizedDescription)"
+                        "⚠️ 古いStream停止エラー: \(error.localizedDescription)"
                     )
                 }
             }
@@ -162,8 +221,10 @@ final class ScreenCaptureCoordinator: NSObject,
             self.stream = nil
         }
 
-        // 新しいストリーム開始
-        startStream(with: filter)
+        // 新しいStreamを開始
+        startStream(
+            with: filter
+        )
     }
 
     // MARK: - Picker Cancel
@@ -173,9 +234,12 @@ final class ScreenCaptureCoordinator: NSObject,
         didCancelFor stream: SCStream?
     ) {
 
-        print("ℹ️ 画面共有がキャンセルされました")
+        print(
+            "ℹ️ 画面共有がキャンセルされました"
+        )
 
         DispatchQueue.main.async { [weak self] in
+
             self?.onStatus?(
                 "画面共有がキャンセルされました"
             )
@@ -189,12 +253,13 @@ final class ScreenCaptureCoordinator: NSObject,
     ) {
 
         print(
-            "❌ 画面共有開始エラー: \(error.localizedDescription)"
+            "❌ Picker開始エラー: \(error.localizedDescription)"
         )
 
         DispatchQueue.main.async { [weak self] in
+
             self?.onStatus?(
-                "⚠️ 画面共有開始エラー: \(error.localizedDescription)"
+                "❌ 画面共有開始エラー: \(error.localizedDescription)"
             )
         }
     }
@@ -205,11 +270,16 @@ final class ScreenCaptureCoordinator: NSObject,
         with filter: SCContentFilter
     ) {
 
-        // iOSではMac専用の
-        // pixelFormat / queueDepth / minimumFrameInterval
-        // などは設定しない
+        print(
+            "▶️ SCStreamを作成します"
+        )
 
-        let configuration = SCStreamConfiguration()
+        var configuration =
+            SCStreamConfiguration()
+
+        // iOSではmacOS専用の
+        // pixelFormat / queueDepth / minimumFrameInterval
+        // を設定しない
 
         let newStream = SCStream(
             filter: filter,
@@ -219,6 +289,7 @@ final class ScreenCaptureCoordinator: NSObject,
 
         do {
 
+            // 画面フレームを受信
             try newStream.addStreamOutput(
                 self,
                 type: .screen,
@@ -227,10 +298,12 @@ final class ScreenCaptureCoordinator: NSObject,
 
             self.stream = newStream
 
-            print("✅ SCStream作成成功")
-            print("▶️ 画面キャプチャを開始します")
+            print(
+                "✅ SCStream作成成功"
+            )
 
             DispatchQueue.main.async { [weak self] in
+
                 self?.onStatus?(
                     "画面キャプチャを開始しています"
                 )
@@ -242,6 +315,10 @@ final class ScreenCaptureCoordinator: NSObject,
 
                     try await newStream.startCapture()
 
+                    print(
+                        "✅ SCStream開始成功"
+                    )
+
                     await MainActor.run {
 
                         self.onStatus?(
@@ -251,9 +328,13 @@ final class ScreenCaptureCoordinator: NSObject,
                         self.onCaptureStarted?()
                     }
 
-                    print("✅ SCStream開始成功")
-
                 } catch {
+
+                    print(
+                        "❌ startCaptureエラー: \(error.localizedDescription)"
+                    )
+
+                    self.stream = nil
 
                     await MainActor.run {
 
@@ -261,12 +342,6 @@ final class ScreenCaptureCoordinator: NSObject,
                             "❌ キャプチャ開始失敗: \(error.localizedDescription)"
                         )
                     }
-
-                    print(
-                        "❌ startCaptureエラー: \(error.localizedDescription)"
-                    )
-
-                    self.stream = nil
                 }
             }
 
@@ -276,13 +351,14 @@ final class ScreenCaptureCoordinator: NSObject,
                 "❌ addStreamOutputエラー: \(error.localizedDescription)"
             )
 
+            self.stream = nil
+
             DispatchQueue.main.async { [weak self] in
+
                 self?.onStatus?(
                     "❌ 画面出力設定エラー: \(error.localizedDescription)"
                 )
             }
-
-            self.stream = nil
         }
     }
 
@@ -294,22 +370,25 @@ final class ScreenCaptureCoordinator: NSObject,
         of type: SCStreamOutputType
     ) {
 
-        // 画面のみ処理
+        // 画面だけ処理
         guard type == .screen else {
             return
         }
 
-        // サンプルバッファ確認
+        // バッファ確認
         guard sampleBuffer.isValid else {
             return
         }
 
         // 画像取得
         guard let pixelBuffer =
-                CMSampleBufferGetImageBuffer(sampleBuffer)
+                CMSampleBufferGetImageBuffer(
+                    sampleBuffer
+                )
         else {
 
             DispatchQueue.main.async { [weak self] in
+
                 self?.onStatus?(
                     "⚠️ 画面画像を取得できません"
                 )
@@ -320,7 +399,7 @@ final class ScreenCaptureCoordinator: NSObject,
 
         let now = Date()
 
-        // OCRしすぎない
+        // OCR間隔
         guard now.timeIntervalSince(lastOCRTime)
                 >= ocrInterval
         else {
@@ -329,7 +408,7 @@ final class ScreenCaptureCoordinator: NSObject,
 
         lastOCRTime = now
 
-        // OCRを別キューで実行
+        // OCR実行
         visionQueue.async { [weak self] in
 
             guard let self else {
@@ -349,6 +428,7 @@ final class ScreenCaptureCoordinator: NSObject,
     ) {
 
         DispatchQueue.main.async { [weak self] in
+
             self?.onStatus?(
                 "✅ 画面フレーム取得 → OCR解析中"
             )
@@ -362,8 +442,12 @@ final class ScreenCaptureCoordinator: NSObject,
                 return
             }
 
-            // OCRエラー
+            // エラー
             if let error {
+
+                print(
+                    "❌ Vision OCRエラー: \(error.localizedDescription)"
+                )
 
                 DispatchQueue.main.async {
 
@@ -372,14 +456,10 @@ final class ScreenCaptureCoordinator: NSObject,
                     )
                 }
 
-                print(
-                    "❌ Vision OCRエラー: \(error.localizedDescription)"
-                )
-
                 return
             }
 
-            // OCR結果
+            // 結果
             guard let observations =
                     request.results
                     as? [VNRecognizedTextObservation]
@@ -414,7 +494,9 @@ final class ScreenCaptureCoordinator: NSObject,
                     continue
                 }
 
-                recognizedTexts.append(value)
+                recognizedTexts.append(
+                    value
+                )
             }
 
             let text =
@@ -426,22 +508,33 @@ final class ScreenCaptureCoordinator: NSObject,
 
                 if text.isEmpty {
 
+                    print(
+                        "⚠️ OCR結果: 文字なし"
+                    )
+
                     self.onStatus?(
                         "⚠️ 画面は取得できていますが、OCRで文字を認識できません"
                     )
 
-                    print("⚠️ OCR結果: 文字なし")
-
                 } else {
+
+                    print(
+                        "✅ OCR成功: \(recognizedTexts.count)項目"
+                    )
+
+                    print(
+                        "🔎 OCR結果:"
+                    )
+
+                    print(text)
 
                     self.onStatus?(
                         "✅ OCR成功（\(recognizedTexts.count)項目）"
                     )
 
-                    print("🔎 OCR結果:")
-                    print(text)
-
-                    self.onOCR?(text)
+                    self.onOCR?(
+                        text
+                    )
                 }
             }
         }
@@ -449,7 +542,7 @@ final class ScreenCaptureCoordinator: NSObject,
         // 高精度OCR
         request.recognitionLevel = .accurate
 
-        // 日本語 + 英語
+        // 日本語・英語
         request.recognitionLanguages = [
             "ja-JP",
             "en-US"
@@ -458,7 +551,7 @@ final class ScreenCaptureCoordinator: NSObject,
         // 言語補正
         request.usesLanguageCorrection = true
 
-        // このアプリでよく登場する言葉
+        // よく使う単語
         request.customWords = [
             "LINE",
             "Safari",
@@ -477,14 +570,16 @@ final class ScreenCaptureCoordinator: NSObject,
         ]
 
         // 小さすぎる文字を除外
-        request.minimumTextHeight = 0.012
+        request.minimumTextHeight =
+            0.012
 
         // Visionへ渡す
-        let handler = VNImageRequestHandler(
-            cvPixelBuffer: pixelBuffer,
-            orientation: .up,
-            options: [:]
-        )
+        let handler =
+            VNImageRequestHandler(
+                cvPixelBuffer: pixelBuffer,
+                orientation: .up,
+                options: [:]
+            )
 
         do {
 
@@ -494,26 +589,28 @@ final class ScreenCaptureCoordinator: NSObject,
 
         } catch {
 
+            print(
+                "❌ OCR実行エラー: \(error.localizedDescription)"
+            )
+
             DispatchQueue.main.async { [weak self] in
 
                 self?.onStatus?(
                     "⚠️ OCR実行エラー: \(error.localizedDescription)"
                 )
             }
-
-            print(
-                "❌ VNImageRequestHandlerエラー: \(error.localizedDescription)"
-            )
         }
     }
 
-    // MARK: - SCStreamDelegate
+    // MARK: - Stream Delegate
 
     func streamDidBecomeActive(
         _ stream: SCStream
     ) {
 
-        print("🟢 SCStream Active")
+        print(
+            "🟢 SCStream Active"
+        )
 
         DispatchQueue.main.async { [weak self] in
 
@@ -527,7 +624,9 @@ final class ScreenCaptureCoordinator: NSObject,
         _ stream: SCStream
     ) {
 
-        print("🟡 SCStream Inactive")
+        print(
+            "🟡 SCStream Inactive"
+        )
 
         DispatchQueue.main.async { [weak self] in
 
