@@ -1,4 +1,3 @@
-```swift
 import SwiftUI
 
 @main
@@ -1177,4 +1176,3 @@ struct ContentView: View {
         }
     }
 }
-```
