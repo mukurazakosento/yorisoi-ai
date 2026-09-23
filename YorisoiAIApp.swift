@@ -412,12 +412,10 @@ final class SupportModel: ObservableObject {
             }
 
 
-            // ★ここが重要
-            //
+            // ----------------------------------------------------
             // 画面が変わっただけでは
-            // STEP達成にしない。
-            //
-            // 新しい画面をそのまま判定する。
+            // STEP達成にしない
+            // ----------------------------------------------------
 
             waitingForScreenChange =
                 false
@@ -728,34 +726,7 @@ final class SupportModel: ObservableObject {
 
 
         // --------------------------------------------------------
-        // 現在画面がすでに次STEPなら
-        // その画面を連続確認する
-        // --------------------------------------------------------
-
-        let currentOCR =
-            normalize(lastOCR)
-
-
-        if matchesCurrentStep(
-            step: nextStep,
-            ocr: currentOCR
-        ) {
-
-            stableMatchCount =
-                1
-
-
-            captureStatus =
-                "正しい画面を確認中 1/\(requiredStableMatches)"
-
-
-            return
-        }
-
-
-        // --------------------------------------------------------
-        // 次STEPの画面ではない
-        // → 次の案内を通知
+        // 次のSTEPの案内を必ず通知
         // --------------------------------------------------------
 
         sendCurrentInstruction()
