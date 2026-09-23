@@ -5,48 +5,80 @@ struct InstructionStep: Identifiable {
 
     let message: String
 
-    // 画面がこの条件を満たしたら次の通知へ進む
+    // 画面確認に使うOCR候補
     let detectKeywords: [String]
 
-    // 候補のうち必要な一致数
+    // 必要な一致数
     let minimumMatches: Int
 
-    // 最後の送信案内
+    // trueならここで自動判定終了
     let manualFinish: Bool
 }
 
 @MainActor
 final class InstructionPlanner {
 
-    func makePlan(
-        recipient: String,
-        message: String
-    ) -> [InstructionStep] {
+    func makePlan(for supportContent: String) -> [InstructionStep] {
 
-        return [
+        let normalizedContent = normalize(supportContent)
 
-            // ---------------------------------------------
-            // STEP 0
-            // Teams画面になったことを確認する
-            // ---------------------------------------------
+        // --------------------------------------------------
+        // Teamsで○○さんにメッセージを送りたい
+        // --------------------------------------------------
 
+        guard normalizedContent.contains("teams") else {
+
+            return [
+                InstructionStep(
+                    message: "現在はTeamsの支援に対応しています。支援内容に「Teamsで○○さんにメッセージを送りたい」と入力してください。",
+                    detectKeywords: [],
+                    minimumMatches: 0,
+                    manualFinish: true
+                )
+            ]
+        }
+
+        let recipient = extractRecipient(
+            from: supportContent
+        )
+
+        if recipient.isEmpty {
+
+            return [
+                InstructionStep(
+                    message: "支援内容に、送る相手の名前を入れてください。例：「Teamsで田中さんにメッセージを送りたい」",
+                    detectKeywords: [],
+                    minimumMatches: 0,
+                    manualFinish: true
+                )
+            ]
+        }
+
+        // --------------------------------------------------
+        // Teamsを開く
+        // --------------------------------------------------
+
+        var plan: [InstructionStep] = []
+
+        plan.append(
             InstructionStep(
                 message: "Teamsを開いてください。",
                 detectKeywords: [
                     "Teams",
-                    "アクティビティ",
                     "チャット",
-                    "チーム"
+                    "チーム",
+                    "アクティビティ"
                 ],
-                minimumMatches: 2,
+                minimumMatches: 1,
                 manualFinish: false
-            ),
+            )
+        )
 
-            // ---------------------------------------------
-            // STEP 1
-            // 相手のチャット画面になったことを確認
-            // ---------------------------------------------
+        // --------------------------------------------------
+        // 相手のチャットを開く
+        // --------------------------------------------------
 
+        plan.append(
             InstructionStep(
                 message: "「\(recipient)」さんのチャットを開いてください。",
                 detectKeywords: [
@@ -54,40 +86,148 @@ final class InstructionPlanner {
                     "チャット",
                     "メッセージ"
                 ],
-                minimumMatches: 2,
+                minimumMatches: 1,
                 manualFinish: false
-            ),
+            )
+        )
 
-            // ---------------------------------------------
-            // STEP 2
-            // 入力した文章を確認
-            // ---------------------------------------------
+        // --------------------------------------------------
+        // メッセージ入力
+        // --------------------------------------------------
 
+        plan.append(
             InstructionStep(
-                message:
-                    "メッセージ入力欄を押して、次の文章を入力してください。\n「\(message)」",
+                message: "メッセージ入力欄を押して、送りたい文章を入力してください。",
                 detectKeywords: [
-                    message,
-                    "送信",
-                    "メッセージ"
+                    "新しいメッセージ",
+                    "メッセージ",
+                    "入力",
+                    "Type a new message"
                 ],
-                minimumMatches: 2,
+                minimumMatches: 1,
                 manualFinish: false
-            ),
+            )
+        )
 
-            // ---------------------------------------------
-            // STEP 3
-            // 送信
-            //
-            // ここから先はAI/OCRで自動的に進めない
-            // ---------------------------------------------
+        // --------------------------------------------------
+        // 送信
+        //
+        // 最後はユーザー自身が送信する。
+        // 自動的に完了扱いにはしない。
+        // --------------------------------------------------
 
+        plan.append(
             InstructionStep(
                 message: "文章を確認して、「送信」ボタンを押してください。",
                 detectKeywords: [],
                 minimumMatches: 0,
                 manualFinish: true
             )
+        )
+
+        return plan
+    }
+
+    // MARK: - Recipient
+
+    private func extractRecipient(
+        from text: String
+    ) -> String {
+
+        // 「Teamsで田中さんにメッセージを送りたい」
+        // を想定
+
+        let patterns = [
+            #"Teamsで(.+?)さんにメッセージ"#,
+            #"Teamsで(.+?)にメッセージ"#,
+            #"Teamsで(.+?)さんに"#,
+            #"Teamsで(.+?)に"#,
+            #"teamsで(.+?)さんにメッセージ"#,
+            #"teamsで(.+?)にメッセージ"#
         ]
+
+        for pattern in patterns {
+
+            guard let regex = try? NSRegularExpression(
+                pattern: pattern,
+                options: [.caseInsensitive]
+            ) else {
+                continue
+            }
+
+            let range = NSRange(
+                text.startIndex..<text.endIndex,
+                in: text
+            )
+
+            if let match = regex.firstMatch(
+                in: text,
+                range: range
+            ) {
+
+                guard match.numberOfRanges > 1 else {
+                    continue
+                }
+
+                let recipientRange =
+                    match.range(at: 1)
+
+                guard let swiftRange =
+                        Range(
+                            recipientRange,
+                            in: text
+                        )
+                else {
+                    continue
+                }
+
+                var recipient =
+                    String(
+                        text[swiftRange]
+                    )
+
+                recipient =
+                    recipient.trimmingCharacters(
+                        in: .whitespacesAndNewlines
+                    )
+
+                recipient =
+                    recipient.replacingOccurrences(
+                        of: "さん",
+                        with: ""
+                    )
+
+                return recipient
+            }
+        }
+
+        return ""
+    }
+
+    // MARK: - Normalize
+
+    private func normalize(
+        _ text: String
+    ) -> String {
+
+        let lowercased =
+            text.lowercased()
+
+        let ignoredCharacters =
+            CharacterSet(
+                charactersIn:
+                    " \n\r\t　。、．，！？!?.,:：;；「」『』（）()[]［］【】"
+            )
+
+        let scalars =
+            lowercased.unicodeScalars.filter {
+                !ignoredCharacters.contains($0)
+            }
+
+        return String(
+            String.UnicodeScalarView(
+                scalars
+            )
+        )
     }
 }
