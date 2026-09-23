@@ -7,10 +7,20 @@ final class NotificationCoordinator {
 
     func requestPermission() async -> Bool {
         do {
-            return try await center.requestAuthorization(
+            let granted = try await center.requestAuthorization(
                 options: [.alert, .sound, .badge]
             )
+
+            let settings = await center.notificationSettings()
+
+            print("通知許可結果: \(granted)")
+            print("通知AuthorizationStatus: \(settings.authorizationStatus.rawValue)")
+            print("アラート設定: \(settings.alertSetting.rawValue)")
+
+            return granted
+
         } catch {
+            print("❌ 通知許可エラー: \(error.localizedDescription)")
             return false
         }
     }
@@ -19,6 +29,13 @@ final class NotificationCoordinator {
         title: String,
         body: String
     ) async {
+
+        let settings = await center.notificationSettings()
+
+        guard settings.authorizationStatus == .authorized else {
+            print("❌ 通知未許可: \(settings.authorizationStatus.rawValue)")
+            return
+        }
 
         let content = UNMutableNotificationContent()
         content.title = title
@@ -43,8 +60,9 @@ final class NotificationCoordinator {
 
         do {
             try await center.add(request)
+            print("✅ 通知登録成功: \(body)")
         } catch {
-            // 試作では通知失敗時もキャプチャを継続する。
+            print("❌ 通知登録失敗: \(error.localizedDescription)")
         }
     }
 }
