@@ -70,8 +70,7 @@ final class InstructionPlanner {
                 message:
                     "Teamsを開いてください。",
                 detectKeywords: [
-                    "Teams",
-                    "Microsoft Teams"
+                    "チーム"
                 ],
                 minimumMatches: 1,
                 manualFinish: false
