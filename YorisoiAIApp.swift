@@ -36,42 +36,38 @@ final class SupportModel: ObservableObject {
 
     private var currentStepIndex: Int = 0
 
-    // 連続一致回数
-    private var keywordMatchCount: Int = 0
-
-    // 最後にステップが進んだ時刻
-    private var lastProgressDate: Date = Date()
-
-    // 再通知回数
-    private var reminderCount: Int = 0
-
-    // 再通知間隔
-    private let reminderInterval: TimeInterval = 10
-
-    // 連続一致が必要な回数
-    private let requiredConsecutiveMatches: Int = 2
+    // 同じ画面条件を連続で確認した回数
+    private var screenMatchCount: Int = 0
 
     // 通知直後のOCR誤判定防止
     private var notificationIgnoreUntil: Date = .distantPast
 
-    private let notificationIgnoreInterval: TimeInterval = 4
+    private let notificationIgnoreInterval: TimeInterval = 5
+
+    // 画面が同じ状態だと2回確認して初めてOK
+    private let requiredStableMatches: Int = 2
 
     // MARK: - Init
 
     init() {
 
+        // OCR
         capture.onOCR = { [weak self] text in
+
             Task { @MainActor in
                 self?.processOCR(text)
             }
         }
 
+        // キャプチャ状態
         capture.onStatus = { [weak self] status in
+
             Task { @MainActor in
                 self?.captureStatus = status
             }
         }
 
+        // キャプチャ開始
         capture.onCaptureStarted = { [weak self] in
 
             Task { @MainActor in
@@ -80,14 +76,18 @@ final class SupportModel: ObservableObject {
                     return
                 }
 
-                self.captureStatus = "画面解析中"
+                self.captureStatus =
+                    "画面を確認しています"
 
-                if !self.plan.isEmpty {
-                    await self.sendCurrentInstruction()
-                }
+                // ★ここでは通知を送らない
+                // 最初の画面をOCRで確認してから判断する
+                print(
+                    "🔍 キャプチャ開始。最初の画面確認を待っています"
+                )
             }
         }
 
+        // 通知状態
         Task { @MainActor in
             await self.checkNotificationStatus()
         }
@@ -153,10 +153,7 @@ final class SupportModel: ObservableObject {
         message: String
     ) async {
 
-        // ---------------------------------------------
-        // Teams専用の支援プランを作成
-        // ---------------------------------------------
-
+        // Teams専用プラン
         plan =
             planner.makePlan(
                 recipient: recipient,
@@ -171,16 +168,15 @@ final class SupportModel: ObservableObject {
             return
         }
 
-        // 初期化
         currentStepIndex = 0
-        keywordMatchCount = 0
-        reminderCount = 0
-        lastProgressDate = Date()
+        screenMatchCount = 0
 
-        currentInstruction =
-            plan[0].message
+        currentInstruction = ""
 
-        // 通知許可
+        // 通知後の待機状態を解除
+        notificationIgnoreUntil =
+            .distantPast
+
         let granted =
             await notifications.requestPermission()
 
@@ -189,23 +185,22 @@ final class SupportModel: ObservableObject {
             notificationStatus =
                 "通知OFF"
 
-            isRunning = false
-
             return
         }
 
-        notificationStatus = "通知ON"
+        notificationStatus =
+            "通知ON"
 
         isRunning = true
 
         captureStatus =
-            "画面取得を開始しています"
+            "画面を確認しています"
 
-        // キャプチャ開始
+        // 画面キャプチャ開始
         capture.startFullDisplayCapture()
     }
 
-    // MARK: - OCR Processing
+    // MARK: - OCR
 
     private func processOCR(
         _ text: String
@@ -221,14 +216,14 @@ final class SupportModel: ObservableObject {
             return
         }
 
-        // ---------------------------------------------
-        // 通知そのものをOCRして誤判定しない
-        // ---------------------------------------------
+        // ------------------------------------------------
+        // 通知直後は判定しない
+        // ------------------------------------------------
 
         if Date() < notificationIgnoreUntil {
 
             print(
-                "⏸️ 通知直後なのでOCR判定を停止"
+                "⏸️ 通知直後なので画面判定を待っています"
             )
 
             return
@@ -237,17 +232,14 @@ final class SupportModel: ObservableObject {
         let step =
             plan[currentStepIndex]
 
-        // ---------------------------------------------
-        // 手動完了ステップ
-        //
-        // 最後の送信案内など。
-        // 通知を出したら自動判定しない。
-        // ---------------------------------------------
+        // ------------------------------------------------
+        // 最終ステップでは自動判定しない
+        // ------------------------------------------------
 
         if step.manualFinish {
 
             print(
-                "🛑 手動完了ステップのため自動判定しません"
+                "🛑 最終ステップ。これ以上自動では進めません"
             )
 
             return
@@ -256,30 +248,96 @@ final class SupportModel: ObservableObject {
         let normalizedOCR =
             normalize(text)
 
-        print("================================")
-        print("🔎 OCR")
-        print(text)
-        print("🎯 現在の案内")
-        print(step.message)
-        print("🔑 検出候補")
-        print(step.detectKeywords)
-        print("================================")
+        // OCRが空なら何もしない
+        guard !normalizedOCR.isEmpty else {
 
-        // キーワードなし
-        if step.detectKeywords.isEmpty {
-
-            checkReminder()
+            print(
+                "⏸️ OCR文字がないので通知しません"
+            )
 
             return
         }
 
-        // ---------------------------------------------
-        // 候補文字をチェック
-        // ---------------------------------------------
+        print("================================")
+        print("🔍 現在のステップ: \(currentStepIndex)")
+        print("📺 OCR:")
+        print(text)
+        print("🎯 次の条件:")
+        print(step.detectKeywords)
+        print("================================")
 
-        var matchedKeywords: [String] = []
+        // ------------------------------------------------
+        // 画面条件を確認
+        // ------------------------------------------------
 
-        for keyword in step.detectKeywords {
+        let matchCount =
+            countMatches(
+                ocr: normalizedOCR,
+                keywords: step.detectKeywords
+            )
+
+        print(
+            "🔎 画面条件一致: \(matchCount)/\(step.minimumMatches)"
+        )
+
+        // ------------------------------------------------
+        // 条件を満たしていない
+        //
+        // ★通知しない
+        // ★再通知もしない
+        // ------------------------------------------------
+
+        guard matchCount >= step.minimumMatches else {
+
+            screenMatchCount = 0
+
+            captureStatus =
+                "画面を確認中（まだ次の操作ではありません）"
+
+            print(
+                "❌ 画面条件不一致 → 通知しません"
+            )
+
+            return
+        }
+
+        // ------------------------------------------------
+        // 条件一致
+        // ------------------------------------------------
+
+        screenMatchCount += 1
+
+        captureStatus =
+            "画面条件を確認中 \(screenMatchCount)/\(requiredStableMatches)"
+
+        print(
+            "✅ 画面条件一致 \(screenMatchCount)/\(requiredStableMatches)"
+        )
+
+        // ------------------------------------------------
+        // 2回連続一致
+        // ------------------------------------------------
+
+        guard screenMatchCount >= requiredStableMatches else {
+            return
+        }
+
+        // 次へ
+        screenMatchCount = 0
+
+        advanceToNextStep()
+    }
+
+    // MARK: - Match Count
+
+    private func countMatches(
+        ocr: String,
+        keywords: [String]
+    ) -> Int {
+
+        var count = 0
+
+        for keyword in keywords {
 
             let normalizedKeyword =
                 normalize(keyword)
@@ -288,61 +346,15 @@ final class SupportModel: ObservableObject {
                 continue
             }
 
-            if normalizedOCR.contains(
+            if ocr.contains(
                 normalizedKeyword
             ) {
 
-                matchedKeywords.append(
-                    keyword
-                )
+                count += 1
             }
         }
 
-        let matchCount =
-            matchedKeywords.count
-
-        print(
-            "🔍 一致数: \(matchCount)/\(step.minimumMatches)"
-        )
-
-        // ---------------------------------------------
-        // 一致
-        // ---------------------------------------------
-
-        if matchCount >= step.minimumMatches {
-
-            keywordMatchCount += 1
-
-            print(
-                "✅ 画面条件一致 \(keywordMatchCount)/\(requiredConsecutiveMatches)"
-            )
-
-            if keywordMatchCount
-                >= requiredConsecutiveMatches {
-
-                keywordMatchCount = 0
-                reminderCount = 0
-                lastProgressDate = Date()
-
-                advanceToNextStep()
-            }
-
-        }
-
-        // ---------------------------------------------
-        // 不一致
-        // ---------------------------------------------
-
-        else {
-
-            keywordMatchCount = 0
-
-            print(
-                "❌ 画面条件不一致"
-            )
-
-            checkReminder()
-        }
+        return count
     }
 
     // MARK: - Advance
@@ -352,29 +364,32 @@ final class SupportModel: ObservableObject {
         currentStepIndex += 1
 
         // ---------------------------------------------
-        // 全ステップ完了
+        // 全ステップ完了ではなく、
+        // 最終案内に入る
         // ---------------------------------------------
 
-        if currentStepIndex >= plan.count {
+        guard currentStepIndex < plan.count else {
 
             finishSupport()
 
             return
         }
 
-        keywordMatchCount = 0
-        reminderCount = 0
-        lastProgressDate = Date()
+        let nextStep =
+            plan[currentStepIndex]
 
         currentInstruction =
-            plan[currentStepIndex].message
+            nextStep.message
 
-        Task { @MainActor in
+        lastProgressDate()
+
+        Task { @MainActor in {
+
             await sendCurrentInstruction()
-        }
+        }}
     }
 
-    // MARK: - Send Current Instruction
+    // MARK: - Send Instruction
 
     private func sendCurrentInstruction() async {
 
@@ -388,13 +403,11 @@ final class SupportModel: ObservableObject {
         currentInstruction =
             step.message
 
+        // ★通知した直後の画面は判定しない
         notificationIgnoreUntil =
             Date().addingTimeInterval(
                 notificationIgnoreInterval
             )
-
-        lastProgressDate =
-            Date()
 
         notificationStatus =
             "案内を送信中"
@@ -408,15 +421,15 @@ final class SupportModel: ObservableObject {
             "通知送信済み"
 
         print(
-            "📣 通知: \(step.message)"
+            "📣 次の画面確認に進むための通知:"
+        )
+
+        print(
+            step.message
         )
 
         // ---------------------------------------------
-        // 最後の送信ステップ
-        //
-        // ここで支援を終了。
-        // OCRが「送信」を拾って勝手に
-        // ミッション達成しないようにする。
+        // 最終案内
         // ---------------------------------------------
 
         if step.manualFinish {
@@ -424,74 +437,10 @@ final class SupportModel: ObservableObject {
             isRunning = false
 
             captureStatus =
-                "送信操作を待っています"
+                "送信ボタンを押してください"
 
             print(
-                "🛑 最終案内を送信。自動判定を終了"
-            )
-        }
-    }
-
-    // MARK: - Reminder
-
-    private func checkReminder() {
-
-        guard isRunning else {
-            return
-        }
-
-        guard currentStepIndex < plan.count else {
-            return
-        }
-
-        let step =
-            plan[currentStepIndex]
-
-        // 手動完了ステップには再通知しない
-        if step.manualFinish {
-            return
-        }
-
-        // 通知直後は再通知しない
-        if Date() < notificationIgnoreUntil {
-            return
-        }
-
-        let now =
-            Date()
-
-        guard now.timeIntervalSince(
-            lastProgressDate
-        ) >= reminderInterval else {
-            return
-        }
-
-        // 1ステップ最大2回
-        guard reminderCount < 2 else {
-            return
-        }
-
-        reminderCount += 1
-        lastProgressDate = now
-
-        notificationIgnoreUntil =
-            Date().addingTimeInterval(
-                notificationIgnoreInterval
-            )
-
-        Task { @MainActor in
-
-            await self.notifications.send(
-                title: "よりそいAI",
-                body:
-                    "もう一度ご案内します。\n\(step.message)"
-            )
-
-            self.notificationStatus =
-                "案内を再通知しました"
-
-            print(
-                "🔁 再通知 \(self.reminderCount)/2"
+                "🛑 最終案内送信。自動判定終了"
             )
         }
     }
@@ -510,20 +459,18 @@ final class SupportModel: ObservableObject {
         captureStatus =
             "支援完了"
 
-        notificationIgnoreUntil =
-            .distantFuture
-
-        Task { @MainActor in
-
-            await notifications.send(
-                title: "よりそいAI",
-                body: "支援が完了しました。"
-            )
-        }
-
         print(
             "🎉 支援完了"
         )
+    }
+
+    // MARK: - Progress
+
+    private func lastProgressDate() {
+        // 今回は「時間が経ったから再通知する」
+        // という仕組みを完全に廃止。
+        //
+        // このメソッドは将来のログ用に残している。
     }
 
     // MARK: - Normalize
@@ -574,7 +521,7 @@ struct ContentView: View {
                         .fontWeight(.bold)
 
                     Text(
-                        "Teamsでメッセージを送るお手伝い"
+                        "Teamsで友達に文章を送るお手伝い"
                     )
                     .foregroundStyle(.secondary)
 
@@ -591,7 +538,7 @@ struct ContentView: View {
                             .font(.headline)
 
                         TextField(
-                            "例：田中さん",
+                            "例：山田さん",
                             text: $model.recipient
                         )
                         .textFieldStyle(
@@ -617,9 +564,7 @@ struct ContentView: View {
                             text: $model.message,
                             axis: .vertical
                         )
-                        .lineLimit(
-                            3...6
-                        )
+                        .lineLimit(3...6)
                         .textFieldStyle(
                             .roundedBorder
                         )
@@ -627,7 +572,7 @@ struct ContentView: View {
                     .padding(.horizontal)
 
                     // -----------------------------------------
-                    // スタート
+                    // 開始
                     // -----------------------------------------
 
                     Button {
@@ -683,7 +628,7 @@ struct ContentView: View {
 
                         Text(
                             model.currentInstruction.isEmpty
-                            ? "まだありません"
+                            ? "画面を確認しています"
                             : model.currentInstruction
                         )
 
@@ -705,7 +650,7 @@ struct ContentView: View {
                             )
                         }
                         .frame(
-                            maxHeight: 180
+                            maxHeight: 200
                         )
                     }
                     .padding()
