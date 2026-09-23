@@ -1,61 +1,32 @@
-name: Build iOS IPA
+- name: Build iOS device
+  run: |
+    set -o pipefail
 
-on:
-  push:
-    branches:
-      - main
+    xcodebuild \
+      -project YorisoiAI.xcodeproj \
+      -scheme YorisoiAI \
+      -sdk iphoneos \
+      -destination 'generic/platform=iOS' \
+      -configuration Debug \
+      -derivedDataPath build \
+      CODE_SIGNING_ALLOWED=NO \
+      CODE_SIGNING_REQUIRED=NO \
+      build 2>&1 | tee build.log
 
-  workflow_dispatch:
+    echo ""
+    echo "=============================="
+    echo "ERROR LINES"
+    echo "=============================="
 
-jobs:
-  build:
-    runs-on: xcode-27
+    grep -n "error:" build.log || true
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+    echo ""
+    echo "=============================="
+    echo "WARNING LINES"
+    echo "=============================="
 
-      - name: Install XcodeGen
-        run: brew install xcodegen
+    grep -n "warning:" build.log || true
 
-      - name: Generate Xcode project
-        run: xcodegen generate
-
-      - name: Show Xcode version
-        run: xcodebuild -version
-
-      - name: Build iOS device
-        run: |
-          xcodebuild \
-            -project YorisoiAI.xcodeproj \
-            -scheme YorisoiAI \
-            -sdk iphoneos \
-            -destination 'generic/platform=iOS' \
-            -configuration Debug \
-            -derivedDataPath build \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            build
-
-      - name: Create IPA
-        run: |
-          APP_PATH=$(find build/Build/Products/Debug-iphoneos -maxdepth 1 -name "*.app" -type d | head -n 1)
-
-          if [ -z "$APP_PATH" ]; then
-            echo "ERROR: .app not found"
-            exit 1
-          fi
-
-          echo "Found app: $APP_PATH"
-
-          rm -rf Payload
-          mkdir Payload
-          cp -R "$APP_PATH" Payload/
-
-          zip -r YorisoiAI.ipa Payload
-
-      - name: Upload IPA
-        uses: actions/upload-artifact@v4
-        with:
-          name: YorisoiAI-IPA
-          path: YorisoiAI.ipa
+    if grep -q "error:" build.log; then
+      exit 1
+    fi
