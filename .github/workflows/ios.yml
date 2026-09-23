@@ -1,32 +1,153 @@
-- name: Build iOS device
-  run: |
-    set -o pipefail
+name: Build iOS IPA
 
-    xcodebuild \
-      -project YorisoiAI.xcodeproj \
-      -scheme YorisoiAI \
-      -sdk iphoneos \
-      -destination 'generic/platform=iOS' \
-      -configuration Debug \
-      -derivedDataPath build \
-      CODE_SIGNING_ALLOWED=NO \
-      CODE_SIGNING_REQUIRED=NO \
-      build 2>&1 | tee build.log
+on:
+  push:
+    branches:
+      - main
 
-    echo ""
-    echo "=============================="
-    echo "ERROR LINES"
-    echo "=============================="
+  workflow_dispatch:
 
-    grep -n "error:" build.log || true
+jobs:
+  build:
+    runs-on: xcode-27
 
-    echo ""
-    echo "=============================="
-    echo "WARNING LINES"
-    echo "=============================="
+    steps:
+      # ----------------------------------------
+      # 1. GitHubのコードを取得
+      # ----------------------------------------
+      - name: Checkout
+        uses: actions/checkout@v4
 
-    grep -n "warning:" build.log || true
+      # ----------------------------------------
+      # 2. XcodeGenをインストール
+      # ----------------------------------------
+      - name: Install XcodeGen
+        run: brew install xcodegen
 
-    if grep -q "error:" build.log; then
-      exit 1
-    fi
+      # ----------------------------------------
+      # 3. Xcodeプロジェクトを生成
+      # ----------------------------------------
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      # ----------------------------------------
+      # 4. Xcodeのバージョン確認
+      # ----------------------------------------
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      # ----------------------------------------
+      # 5. iPhone向けビルド
+      # ----------------------------------------
+      - name: Build iOS device
+        run: |
+          set -o pipefail
+
+          xcodebuild \
+            -project YorisoiAI.xcodeproj \
+            -scheme YorisoiAI \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -configuration Debug \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build 2>&1 | tee build.log
+
+          echo ""
+          echo "========================================"
+          echo "ERROR LINES"
+          echo "========================================"
+
+          grep -n "error:" build.log || true
+
+          echo ""
+          echo "========================================"
+          echo "WARNING LINES"
+          echo "========================================"
+
+          grep -n "warning:" build.log || true
+
+          echo ""
+          echo "========================================"
+          echo "BUILD RESULT"
+          echo "========================================"
+
+          if grep -q "error:" build.log; then
+            echo "❌ BUILD FAILED"
+            exit 1
+          else
+            echo "✅ BUILD SUCCEEDED"
+          fi
+
+      # ----------------------------------------
+      # 6. .appが生成されているか確認
+      # ----------------------------------------
+      - name: Find app
+        run: |
+          echo "========================================"
+          echo "SEARCHING FOR APP"
+          echo "========================================"
+
+          find build/Build/Products/Debug-iphoneos \
+            -maxdepth 1 \
+            -name "*.app" \
+            -type d \
+            -print
+
+      # ----------------------------------------
+      # 7. IPAを作成
+      # ----------------------------------------
+      - name: Create IPA
+        run: |
+          set -e
+
+          APP_PATH=$(find \
+            build/Build/Products/Debug-iphoneos \
+            -maxdepth 1 \
+            -name "*.app" \
+            -type d \
+            | head -n 1)
+
+          if [ -z "$APP_PATH" ]; then
+            echo "❌ ERROR: .app not found"
+            exit 1
+          fi
+
+          echo "✅ APP FOUND:"
+          echo "$APP_PATH"
+
+          rm -rf Payload
+
+          mkdir -p Payload
+
+          cp -R "$APP_PATH" Payload/
+
+          zip -r YorisoiAI.ipa Payload
+
+          echo ""
+          echo "========================================"
+          echo "IPA CREATED"
+          echo "========================================"
+
+          ls -lh YorisoiAI.ipa
+
+      # ----------------------------------------
+      # 8. build.logも保存
+      # ----------------------------------------
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: YorisoiAI-Build-Log
+          path: build.log
+
+      # ----------------------------------------
+      # 9. IPAをGitHub Actionsから取得できるようにする
+      # ----------------------------------------
+      - name: Upload IPA
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: YorisoiAI-IPA
+          path: YorisoiAI.ipa
