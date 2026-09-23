@@ -29,12 +29,13 @@ final class ScreenCaptureCoordinator: NSObject,
 
     private var lastOCRTime: CFTimeInterval = 0
 
-    // 約1秒に1回OCRする
+    // 約0.8秒に1回OCR
     private let ocrInterval: CFTimeInterval = 0.8
 
     // MARK: - State
 
     private var isPaused = false
+    private var isCapturing = false
 
     // MARK: - Init
 
@@ -81,18 +82,23 @@ final class ScreenCaptureCoordinator: NSObject,
     func stop() {
 
         guard let currentStream = stream else {
+            isCapturing = false
             onStatus?("画面キャプチャ：停止")
             return
         }
 
         stream = nil
+        isCapturing = false
 
         Task {
             do {
                 try await currentStream.stopCapture()
+
+                print("✅ SCStream stopCapture 完了")
+
             } catch {
                 print(
-                    "画面キャプチャ停止エラー: \(error.localizedDescription)"
+                    "❌ 画面キャプチャ停止エラー: \(error.localizedDescription)"
                 )
             }
 
@@ -110,31 +116,42 @@ final class ScreenCaptureCoordinator: NSObject,
         for stream: SCStream?
     ) {
 
+        print("📡 ContentSharingPicker didUpdateWith")
+
         // iOSでは既存SCStreamの
         // updateContentFilter が利用できないため、
-        // 最初の選択時だけ新規ストリームを作る。
-        if stream != nil {
-            onStatus?("画面共有設定を更新しました")
-            return
-        }
+        // 新しい選択が来た場合は既存ストリームを止めて
+        // 新しいストリームを作る。
 
-        // 念のため既存ストリームがあれば停止
-        if let oldStream = self.stream {
+        if let existingStream = self.stream {
+            print("⚠️ 既存SCStreamを停止して作り直します")
+
             self.stream = nil
+            self.isCapturing = false
 
             Task {
-                try? await oldStream.stopCapture()
+                do {
+                    try await existingStream.stopCapture()
+                    print("✅ 既存SCStream停止完了")
+                } catch {
+                    print(
+                        "⚠️ 既存SCStream停止エラー: \(error.localizedDescription)"
+                    )
+                }
             }
         }
 
+        // iOS用ストリーム設定
         let configuration = SCStreamConfiguration()
 
         // 音声は不要
         configuration.capturesAudio = false
 
-        // iOSではqueueDepth / minimumFrameIntervalを
-        // 明示設定しない。
-        // OCR側で処理頻度を制御する。
+        // iOSでは
+        // queueDepth
+        // minimumFrameInterval
+        // captureMicrophone
+        // などを明示設定しない。
 
         let newStream = SCStream(
             filter: filter,
@@ -154,9 +171,17 @@ final class ScreenCaptureCoordinator: NSObject,
 
             onStatus?("画面キャプチャ開始")
 
+            print("✅ SCStream作成完了")
+
             Task {
+
                 do {
+
                     try await newStream.startCapture()
+
+                    self.isCapturing = true
+
+                    print("✅ SCStream startCapture 成功")
 
                     await MainActor.run {
                         self.onStatus?("画面を確認中")
@@ -164,26 +189,30 @@ final class ScreenCaptureCoordinator: NSObject,
 
                 } catch {
 
+                    self.isCapturing = false
+
+                    print(
+                        "❌ SCStream startCapture エラー: \(error.localizedDescription)"
+                    )
+
                     await MainActor.run {
                         self.onStatus?(
                             "画面キャプチャ開始エラー: \(error.localizedDescription)"
                         )
                     }
-
-                    print(
-                        "SCStream startCapture error: \(error)"
-                    )
                 }
             }
 
         } catch {
+
+            self.isCapturing = false
 
             onStatus?(
                 "画面出力設定エラー: \(error.localizedDescription)"
             )
 
             print(
-                "addStreamOutput error: \(error)"
+                "❌ addStreamOutput エラー: \(error)"
             )
         }
     }
@@ -193,6 +222,8 @@ final class ScreenCaptureCoordinator: NSObject,
         didCancelFor stream: SCStream?
     ) {
 
+        print("⚠️ 画面共有がキャンセルされました")
+
         onStatus?("画面共有がキャンセルされました")
     }
 
@@ -200,13 +231,46 @@ final class ScreenCaptureCoordinator: NSObject,
         _ error: any Error
     ) {
 
+        print(
+            "❌ Content Sharing Picker エラー: \(error.localizedDescription)"
+        )
+
         onStatus?(
             "画面共有を開始できませんでした: \(error.localizedDescription)"
         )
+    }
 
-        print(
-            "Content Sharing Picker error: \(error)"
-        )
+    // MARK: - SCStreamDelegate
+    // ストリームが有効になった
+
+    func streamDidBecomeActive(
+        _ stream: SCStream
+    ) {
+
+        isCapturing = true
+
+        print("✅ SCStream active")
+
+        Task {
+            await MainActor.run {
+                self.onStatus?("画面キャプチャ：稼働中")
+            }
+        }
+    }
+
+    // ストリームが一時的に無効になった
+
+    func streamDidBecomeInactive(
+        _ stream: SCStream
+    ) {
+
+        print("⚠️ SCStream inactive")
+
+        Task {
+            await MainActor.run {
+                self.onStatus?("画面キャプチャ：一時停止")
+            }
+        }
     }
 
     // MARK: - SCStreamOutput
@@ -217,14 +281,17 @@ final class ScreenCaptureCoordinator: NSObject,
         of type: SCStreamOutputType
     ) {
 
+        // 画面映像以外は無視
         guard type == .screen else {
             return
         }
 
+        // プライバシーモードなどで停止中
         guard !isPaused else {
             return
         }
 
+        // 画像バッファ取得
         guard let pixelBuffer = sampleBuffer.imageBuffer else {
             return
         }
@@ -243,9 +310,12 @@ final class ScreenCaptureCoordinator: NSObject,
 
     // MARK: - OCR
 
-    private func performOCR(on pixelBuffer: CVPixelBuffer) {
+    private func performOCR(
+        on pixelBuffer: CVPixelBuffer
+    ) {
 
-        let request = VNRecognizeTextRequest { [weak self] request, error in
+        let request = VNRecognizeTextRequest {
+            [weak self] request, error in
 
             guard let self else {
                 return
@@ -253,7 +323,7 @@ final class ScreenCaptureCoordinator: NSObject,
 
             if let error {
                 print(
-                    "OCRエラー: \(error.localizedDescription)"
+                    "❌ OCRエラー: \(error.localizedDescription)"
                 )
                 return
             }
@@ -264,7 +334,9 @@ final class ScreenCaptureCoordinator: NSObject,
                 return
             }
 
-            let texts = observations.compactMap { observation in
+            let texts = observations.compactMap {
+                observation -> String? in
+
                 observation
                     .topCandidates(1)
                     .first?
@@ -281,10 +353,16 @@ final class ScreenCaptureCoordinator: NSObject,
                 return
             }
 
+            print("🔎 OCR:")
+            print(fullText)
+
             self.onOCR?(fullText)
         }
 
+        // 高速OCR
         request.recognitionLevel = .fast
+
+        // 日本語補正
         request.usesLanguageCorrection = true
 
         request.recognitionLanguages = [
@@ -299,23 +377,30 @@ final class ScreenCaptureCoordinator: NSObject,
         )
 
         do {
+
             try handler.perform([request])
+
         } catch {
+
             print(
-                "Vision OCR実行エラー: \(error.localizedDescription)"
+                "❌ Vision OCR実行エラー: \(error.localizedDescription)"
             )
         }
     }
 
     // MARK: - SCStreamDelegate
+    // ストリームがエラーで停止した
 
     func stream(
         _ stream: SCStream,
         didStopWithError error: any Error
     ) {
 
+        isCapturing = false
+
+        print("❌ SCStream stopped")
         print(
-            "SCStream stopped: \(error.localizedDescription)"
+            "❌ エラー: \(error.localizedDescription)"
         )
 
         if self.stream === stream {
@@ -323,9 +408,11 @@ final class ScreenCaptureCoordinator: NSObject,
         }
 
         Task {
+
             await MainActor.run {
+
                 self.onStatus?(
-                    "画面キャプチャが停止しました"
+                    "画面キャプチャ停止: \(error.localizedDescription)"
                 )
             }
         }
