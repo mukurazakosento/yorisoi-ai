@@ -1,9 +1,7 @@
-```swift
 import SwiftUI
 
 @main
 struct YorisoiAIApp: App {
-
     @StateObject private var model = SupportModel()
 
     var body: some Scene {
@@ -33,54 +31,58 @@ final class SupportModel: ObservableObject {
     private var plan: [InstructionStep] = []
     private var currentStepIndex: Int = 0
 
-    // 同じステップを何回連続で認識したか
+    // 現在のステップがOCRで何回連続一致したか
     private var keywordMatchCount: Int = 0
 
     // 最後にステップが進んだ時刻
     private var lastProgressDate: Date = Date()
 
-    // 再通知した回数
+    // 現在のステップを再通知した回数
     private var reminderCount: Int = 0
 
-    // 再通知の間隔
+    // 再通知までの時間
     private let reminderInterval: TimeInterval = 8
 
-    // 連続判定回数
-    private let requiredMatchCount = 2
+    // 連続一致が必要な回数
+    private let requiredMatchCount: Int = 2
 
     init() {
 
+        // OCRを受け取った時
         capture.onOCR = { [weak self] text in
             Task { @MainActor in
                 self?.processOCR(text)
             }
         }
 
+        // キャプチャ状態が変わった時
         capture.onStatus = { [weak self] status in
             Task { @MainActor in
                 self?.captureStatus = status
             }
         }
 
+        // 画面キャプチャ開始成功
         capture.onCaptureStarted = { [weak self] in
             Task { @MainActor in
                 guard let self else { return }
 
                 self.captureStatus = "画面解析中"
 
-                // キャプチャ開始直後に最初の案内を通知
+                // 最初の案内をすぐ通知
                 if !self.plan.isEmpty {
                     await self.sendCurrentInstruction()
                 }
             }
         }
 
+        // 通知状態を確認
         Task { @MainActor in
-            await checkNotificationStatus()
+            await self.checkNotificationStatus()
         }
     }
 
-    // MARK: - 通知状態確認
+    // MARK: - Notification
 
     private func checkNotificationStatus() async {
 
@@ -93,11 +95,16 @@ final class SupportModel: ObservableObject {
         }
     }
 
-    // MARK: - 支援開始
+    // MARK: - Start
 
     func start() {
 
-        guard !goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        let trimmedGoal = goal.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+
+        guard !trimmedGoal.isEmpty else {
+            notificationStatus = "やりたいことを入力してください"
             return
         }
 
@@ -108,7 +115,7 @@ final class SupportModel: ObservableObject {
 
     private func startAsync() async {
 
-        // 支援内容を作成
+        // 支援プランを作成
         plan = planner.makePlan(for: goal)
 
         guard !plan.isEmpty else {
@@ -116,21 +123,22 @@ final class SupportModel: ObservableObject {
             return
         }
 
+        // 初期化
         currentStepIndex = 0
         keywordMatchCount = 0
         reminderCount = 0
         lastProgressDate = Date()
 
-        // 通知権限
+        // 通知権限を確認
         let granted = await notifications.requestPermission()
 
-        if granted {
-            notificationStatus = "通知ON"
-        } else {
+        guard granted else {
             notificationStatus = "通知OFF"
+            isRunning = false
             return
         }
 
+        notificationStatus = "通知ON"
         isRunning = true
         captureStatus = "画面取得を開始しています"
 
@@ -138,7 +146,7 @@ final class SupportModel: ObservableObject {
         capture.startFullDisplayCapture()
     }
 
-    // MARK: - OCR処理
+    // MARK: - OCR Processing
 
     private func processOCR(_ text: String) {
 
@@ -154,30 +162,36 @@ final class SupportModel: ObservableObject {
 
         let step = plan[currentStepIndex]
 
-        // OCRを正規化
         let normalizedOCR = normalize(text)
         let normalizedKeyword = normalize(step.detectKeyword)
 
-        print("🔎 OCR: \(text)")
-        print("🎯 現在の案内: \(step.message)")
-        print("🔑 判定キーワード: \(step.detectKeyword)")
+        print("================================")
+        print("🔎 OCR:")
+        print(text)
+        print("🎯 現在のステップ:")
+        print(step.message)
+        print("🔑 判定キーワード:")
+        print(step.detectKeyword)
+        print("================================")
 
-        // キーワードが空なら、このステップでは自動判定しない
+        // キーワードが設定されていない場合
         guard !normalizedKeyword.isEmpty else {
             checkReminder()
             return
         }
 
-        // OCRにキーワードが含まれているか
+        // OCR文字列の中にキーワードがあるか
         let matched = normalizedOCR.contains(normalizedKeyword)
 
         if matched {
 
             keywordMatchCount += 1
 
-            print("✅ キーワード一致 \(keywordMatchCount)/\(requiredMatchCount)")
+            print(
+                "✅ キーワード一致: \(keywordMatchCount)/\(requiredMatchCount)"
+            )
 
-            // 十分な回数一致したら次へ
+            // 2回連続一致で次へ
             if keywordMatchCount >= requiredMatchCount {
 
                 keywordMatchCount = 0
@@ -189,25 +203,30 @@ final class SupportModel: ObservableObject {
 
         } else {
 
-            // 一致しなかったら連続カウントをリセット
+            // 一致しなければ連続一致をリセット
             keywordMatchCount = 0
+
+            print("❌ キーワード不一致")
 
             // 一定時間進まなければ再通知
             checkReminder()
         }
     }
 
-    // MARK: - 次のステップへ
+    // MARK: - Advance
 
     private func advanceToNextStep() {
 
         currentStepIndex += 1
 
-        // 全ステップ完了
+        // すべて完了
         if currentStepIndex >= plan.count {
 
             isRunning = false
+
             capture.stop()
+
+            captureStatus = "支援完了"
 
             Task { @MainActor in
                 await notifications.send(
@@ -216,19 +235,22 @@ final class SupportModel: ObservableObject {
                 )
             }
 
-            captureStatus = "支援完了"
-
             print("🎉 ミッション達成")
             return
         }
 
-        // 次のステップの通知
+        // 次のステップの時間を更新
+        lastProgressDate = Date()
+        reminderCount = 0
+        keywordMatchCount = 0
+
+        // 次の案内
         Task { @MainActor in
             await sendCurrentInstruction()
         }
     }
 
-    // MARK: - 現在の案内を通知
+    // MARK: - Send Current Instruction
 
     private func sendCurrentInstruction() async {
 
@@ -247,10 +269,11 @@ final class SupportModel: ObservableObject {
 
         notificationStatus = "通知送信済み"
 
-        print("📣 案内: \(step.message)")
+        print("📣 案内通知:")
+        print(step.message)
     }
 
-    // MARK: - 再通知
+    // MARK: - Reminder
 
     private func checkReminder() {
 
@@ -264,12 +287,13 @@ final class SupportModel: ObservableObject {
 
         let now = Date()
 
-        // まだ8秒たっていない
-        guard now.timeIntervalSince(lastProgressDate) >= reminderInterval else {
+        // 8秒経過していない場合は何もしない
+        guard now.timeIntervalSince(lastProgressDate)
+                >= reminderInterval else {
             return
         }
 
-        // 再通知は1ステップにつき最大3回
+        // 1ステップ最大3回まで再通知
         guard reminderCount < 3 else {
             return
         }
@@ -292,11 +316,15 @@ final class SupportModel: ObservableObject {
 
             self.notificationStatus = "案内を再通知しました"
 
-            print("🔁 再通知 \(self.reminderCount)/3: \(step.message)")
+            print(
+                "🔁 再通知 \(self.reminderCount)/3"
+            )
+
+            print(step.message)
         }
     }
 
-    // MARK: - OCR正規化
+    // MARK: - Normalize OCR
 
     private func normalize(_ text: String) -> String {
 
@@ -304,16 +332,16 @@ final class SupportModel: ObservableObject {
 
         let ignoredCharacters = CharacterSet(
             charactersIn:
-                " \n\r\t　。、．，！？!?,:：;；「」『』（）()[]［］【】"
+                " \n\r\t　。、．，！？!?.,:：;；「」『』（）()[]［］【】"
         )
 
-        let cleaned = lowercased
-            .unicodeScalars
-            .filter {
-                !ignoredCharacters.contains($0)
-            }
+        let scalars = lowercased.unicodeScalars.filter {
+            !ignoredCharacters.contains($0)
+        }
 
-        return String(String.UnicodeScalarView(cleaned))
+        return String(
+            String.UnicodeScalarView(scalars)
+        )
     }
 }
 
@@ -344,24 +372,42 @@ struct ContentView: View {
                 .padding(.horizontal)
 
                 Button {
+
                     model.start()
+
                 } label: {
-                    Text(model.isRunning ? "支援中" : "支援を開始")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity)
-                        .padding()
+
+                    Text(
+                        model.isRunning
+                        ? "支援中"
+                        : "支援を開始"
+                    )
+                    .font(.headline)
+                    .frame(maxWidth: .infinity)
+                    .padding()
                 }
                 .buttonStyle(.borderedProminent)
                 .padding(.horizontal)
 
-                VStack(alignment: .leading, spacing: 10) {
+                VStack(
+                    alignment: .leading,
+                    spacing: 10
+                ) {
 
                     Text("状態")
                         .font(.headline)
 
-                    Text("支援：\(model.isRunning ? "実行中" : "停止")")
-                    Text("画面：\(model.captureStatus)")
-                    Text("通知：\(model.notificationStatus)")
+                    Text(
+                        "支援：\(model.isRunning ? "実行中" : "停止")"
+                    )
+
+                    Text(
+                        "画面：\(model.captureStatus)"
+                    )
+
+                    Text(
+                        "通知：\(model.notificationStatus)"
+                    )
 
                     Divider()
 
@@ -369,6 +415,7 @@ struct ContentView: View {
                         .font(.headline)
 
                     ScrollView {
+
                         Text(
                             model.lastOCR.isEmpty
                             ? "まだ画面を認識していません"
@@ -382,7 +429,10 @@ struct ContentView: View {
                     .frame(maxHeight: 180)
                 }
                 .padding()
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(
+                    maxWidth: .infinity,
+                    alignment: .leading
+                )
 
                 Spacer()
             }
@@ -391,4 +441,3 @@ struct ContentView: View {
         }
     }
 }
-```
