@@ -18,7 +18,10 @@ targets:
 
     info:
       path: Info.plist
-
+      properties:
+        UIBackgroundModes:
+          - screen-capture
+          
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: jp.yorisoi.app
       SWIFT_VERSION: "5.0"
