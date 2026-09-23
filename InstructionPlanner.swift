@@ -5,13 +5,13 @@ struct InstructionStep: Identifiable {
 
     let message: String
 
-    // OCRで画面を判定するための候補文字
+    // 画面がこの条件を満たしたら次の通知へ進む
     let detectKeywords: [String]
 
-    // 候補のうち何個一致したら画面OKとするか
+    // 候補のうち必要な一致数
     let minimumMatches: Int
 
-    // trueなら、このステップは通知したところで自動判定終了
+    // 最後の送信案内
     let manualFinish: Bool
 }
 
@@ -23,101 +23,71 @@ final class InstructionPlanner {
         message: String
     ) -> [InstructionStep] {
 
-        var plan: [InstructionStep] = []
+        return [
 
-        // --------------------------------------------------
-        // 1. Teamsを開く
-        // --------------------------------------------------
-        plan.append(
+            // ---------------------------------------------
+            // STEP 0
+            // Teams画面になったことを確認する
+            // ---------------------------------------------
+
             InstructionStep(
                 message: "Teamsを開いてください。",
                 detectKeywords: [
                     "Teams",
+                    "アクティビティ",
                     "チャット",
-                    "チーム",
-                    "アクティビティ"
+                    "チーム"
                 ],
-                minimumMatches: 1,
+                minimumMatches: 2,
                 manualFinish: false
-            )
-        )
+            ),
 
-        // --------------------------------------------------
-        // 2. 友達のチャットを開く
-        // --------------------------------------------------
+            // ---------------------------------------------
+            // STEP 1
+            // 相手のチャット画面になったことを確認
+            // ---------------------------------------------
 
-        if recipient.trimmingCharacters(
-            in: .whitespacesAndNewlines
-        ).isEmpty {
+            InstructionStep(
+                message: "「\(recipient)」さんのチャットを開いてください。",
+                detectKeywords: [
+                    recipient,
+                    "チャット",
+                    "メッセージ"
+                ],
+                minimumMatches: 2,
+                manualFinish: false
+            ),
 
-            plan.append(
-                InstructionStep(
-                    message: "送る相手のチャットを開いてください。",
-                    detectKeywords: [
-                        "チャット",
-                        "メッセージ"
-                    ],
-                    minimumMatches: 1,
-                    manualFinish: false
-                )
-            )
+            // ---------------------------------------------
+            // STEP 2
+            // 入力した文章を確認
+            // ---------------------------------------------
 
-        } else {
-
-            plan.append(
-                InstructionStep(
-                    message: "「\(recipient)」さんのチャットを開いてください。",
-                    detectKeywords: [
-                        recipient
-                    ],
-                    minimumMatches: 1,
-                    manualFinish: false
-                )
-            )
-        }
-
-        // --------------------------------------------------
-        // 3. メッセージを入力
-        // --------------------------------------------------
-
-        plan.append(
             InstructionStep(
                 message:
-                    message.isEmpty
-                    ? "メッセージ入力欄を押して、文章を入力してください。"
-                    : "メッセージ入力欄を押して、次の文章を入力してください。\n「\(message)」",
+                    "メッセージ入力欄を押して、次の文章を入力してください。\n「\(message)」",
                 detectKeywords: [
-                    "メッセージを入力",
-                    "メッセージを入力してください",
-                    "新しいメッセージ",
-                    "メッセージ",
-                    "Type a new message"
+                    message,
+                    "送信",
+                    "メッセージ"
                 ],
-                minimumMatches: 1,
+                minimumMatches: 2,
                 manualFinish: false
-            )
-        )
+            ),
 
-        // --------------------------------------------------
-        // 4. 送信
-        //
-        // OCRだけでは「送信前」と「送信後」を
-        // 正確に区別しにくいため、
-        // ここは最後の案内を出したら自動判定を終了。
-        // --------------------------------------------------
+            // ---------------------------------------------
+            // STEP 3
+            // 送信
+            //
+            // ここから先はAI/OCRで自動的に進めない
+            // ---------------------------------------------
 
-        plan.append(
             InstructionStep(
                 message: "文章を確認して、「送信」ボタンを押してください。",
-                detectKeywords: [
-                    "送信",
-                    "Send"
-                ],
-                minimumMatches: 1,
+                detectKeywords: [],
+                minimumMatches: 0,
                 manualFinish: true
             )
-        )
-
-        return plan
+        ]
     }
 }
