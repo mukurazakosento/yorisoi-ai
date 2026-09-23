@@ -5,127 +5,121 @@ struct InstructionStep: Identifiable {
 
     let message: String
 
-    // 画面確認に使うOCR候補
-    let detectKeywords: [String]
+    // すべてのグループを満たしたら
+    // 「この画面になった」と判断する
+    //
+    // 例：
+    // [["Teams"], ["チャット", "アクティビティ"]]
+    //
+    // → Teamsがあり、さらにチャットかアクティビティがある
+    let keywordGroups: [[String]]
 
-    // 必要な一致数
-    let minimumMatches: Int
-
-    // trueならここで自動判定終了
+    // このステップを通知したら自動支援を終了するか
     let manualFinish: Bool
 }
 
 @MainActor
 final class InstructionPlanner {
 
-    func makePlan(for supportContent: String) -> [InstructionStep] {
+    func makePlan(
+        for supportContent: String
+    ) -> [InstructionStep] {
 
-        let normalizedContent = normalize(supportContent)
+        let normalized =
+            normalize(supportContent)
 
-        // --------------------------------------------------
-        // Teamsで○○さんにメッセージを送りたい
-        // --------------------------------------------------
-
-        guard normalizedContent.contains("teams") else {
+        guard normalized.contains("teams") else {
 
             return [
                 InstructionStep(
-                    message: "現在はTeamsの支援に対応しています。支援内容に「Teamsで○○さんにメッセージを送りたい」と入力してください。",
-                    detectKeywords: [],
-                    minimumMatches: 0,
+                    message:
+                        "現在はTeamsの支援に対応しています。「Teamsで○○さんにメッセージを送りたい」と入力してください。",
+                    keywordGroups: [],
                     manualFinish: true
                 )
             ]
         }
 
-        let recipient = extractRecipient(
-            from: supportContent
-        )
+        let recipient =
+            extractRecipient(
+                from: supportContent
+            )
 
-        if recipient.isEmpty {
+        guard !recipient.isEmpty else {
 
             return [
                 InstructionStep(
-                    message: "支援内容に、送る相手の名前を入れてください。例：「Teamsで田中さんにメッセージを送りたい」",
-                    detectKeywords: [],
-                    minimumMatches: 0,
+                    message:
+                        "送る相手の名前を入れてください。例：「Teamsで田中さんにメッセージを送りたい」",
+                    keywordGroups: [],
                     manualFinish: true
                 )
             ]
         }
 
         // --------------------------------------------------
+        // STEP 1
         // Teamsを開く
         // --------------------------------------------------
 
-        var plan: [InstructionStep] = []
-
-        plan.append(
+        let step1 =
             InstructionStep(
-                message: "Teamsを開いてください。",
-                detectKeywords: [
-                    "Teams",
-                    "チャット",
-                    "チーム",
-                    "アクティビティ"
+                message:
+                    "Teamsを開いてください。",
+                keywordGroups: [
+                    [
+                        "Teams"
+                    ],
+                    [
+                        "チャット",
+                        "アクティビティ",
+                        "チーム"
+                    ]
                 ],
-                minimumMatches: 1,
                 manualFinish: false
             )
-        )
 
         // --------------------------------------------------
-        // 相手のチャットを開く
+        // STEP 2
+        // 友達のチャットを開く
         // --------------------------------------------------
 
-        plan.append(
+        let step2 =
             InstructionStep(
-                message: "「\(recipient)」さんのチャットを開いてください。",
-                detectKeywords: [
-                    recipient,
-                    "チャット",
-                    "メッセージ"
+                message:
+                    "「\(recipient)」さんのチャットを開いてください。",
+                keywordGroups: [
+                    [
+                        recipient
+                    ],
+                    [
+                        "チャット",
+                        "メッセージ"
+                    ]
                 ],
-                minimumMatches: 1,
                 manualFinish: false
             )
-        )
 
         // --------------------------------------------------
-        // メッセージ入力
-        // --------------------------------------------------
-
-        plan.append(
-            InstructionStep(
-                message: "メッセージ入力欄を押して、送りたい文章を入力してください。",
-                detectKeywords: [
-                    "新しいメッセージ",
-                    "メッセージ",
-                    "入力",
-                    "Type a new message"
-                ],
-                minimumMatches: 1,
-                manualFinish: false
-            )
-        )
-
-        // --------------------------------------------------
-        // 送信
+        // STEP 3
+        // メッセージ入力 → 送信
         //
-        // 最後はユーザー自身が送信する。
-        // 自動的に完了扱いにはしない。
+        // ここでユーザーに手動操作してもらって終了
         // --------------------------------------------------
 
-        plan.append(
+        let step3 =
             InstructionStep(
-                message: "文章を確認して、「送信」ボタンを押してください。",
-                detectKeywords: [],
-                minimumMatches: 0,
+                message:
+                    "メッセージ入力欄を押して、送りたい文章を入力してください。入力したら「送信」を押してください。",
+                keywordGroups: [],
                 manualFinish: true
             )
-        )
 
-        return plan
+        return [
+            step1,
+            step2,
+            step3
+        ]
     }
 
     // MARK: - Recipient
@@ -134,71 +128,89 @@ final class InstructionPlanner {
         from text: String
     ) -> String {
 
-        // 「Teamsで田中さんにメッセージを送りたい」
-        // を想定
-
         let patterns = [
+
             #"Teamsで(.+?)さんにメッセージ"#,
+
             #"Teamsで(.+?)にメッセージ"#,
+
             #"Teamsで(.+?)さんに"#,
+
             #"Teamsで(.+?)に"#,
+
             #"teamsで(.+?)さんにメッセージ"#,
+
             #"teamsで(.+?)にメッセージ"#
         ]
 
         for pattern in patterns {
 
-            guard let regex = try? NSRegularExpression(
-                pattern: pattern,
-                options: [.caseInsensitive]
-            ) else {
+            guard let regex =
+                    try? NSRegularExpression(
+                        pattern: pattern,
+                        options: [
+                            .caseInsensitive
+                        ]
+                    )
+            else {
                 continue
             }
 
-            let range = NSRange(
-                text.startIndex..<text.endIndex,
-                in: text
-            )
+            let range =
+                NSRange(
+                    text.startIndex..<text.endIndex,
+                    in: text
+                )
 
-            if let match = regex.firstMatch(
-                in: text,
-                range: range
-            ) {
-
-                guard match.numberOfRanges > 1 else {
-                    continue
-                }
-
-                let recipientRange =
-                    match.range(at: 1)
-
-                guard let swiftRange =
-                        Range(
-                            recipientRange,
-                            in: text
-                        )
-                else {
-                    continue
-                }
-
-                var recipient =
-                    String(
-                        text[swiftRange]
+            guard let match =
+                    regex.firstMatch(
+                        in: text,
+                        range: range
                     )
-
-                recipient =
-                    recipient.trimmingCharacters(
-                        in: .whitespacesAndNewlines
-                    )
-
-                recipient =
-                    recipient.replacingOccurrences(
-                        of: "さん",
-                        with: ""
-                    )
-
-                return recipient
+            else {
+                continue
             }
+
+            guard match.numberOfRanges > 1 else {
+                continue
+            }
+
+            let recipientRange =
+                match.range(
+                    at: 1
+                )
+
+            guard let swiftRange =
+                    Range(
+                        recipientRange,
+                        in: text
+                    )
+            else {
+                continue
+            }
+
+            var recipient =
+                String(
+                    text[swiftRange]
+                )
+
+            recipient =
+                recipient.trimmingCharacters(
+                    in: .whitespacesAndNewlines
+                )
+
+            recipient =
+                recipient.replacingOccurrences(
+                    of: "さん",
+                    with: ""
+                )
+
+            recipient =
+                recipient.trimmingCharacters(
+                    in: .whitespacesAndNewlines
+                )
+
+            return recipient
         }
 
         return ""
