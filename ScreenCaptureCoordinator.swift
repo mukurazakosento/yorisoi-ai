@@ -15,6 +15,7 @@ final class ScreenCaptureCoordinator: NSObject,
 
     var onOCR: ((String) -> Void)?
     var onStatus: ((String) -> Void)?
+    var onCaptureStarted: (() -> Void)?
 
     // MARK: - Screen Capture
 
@@ -185,6 +186,7 @@ final class ScreenCaptureCoordinator: NSObject,
 
                     await MainActor.run {
                         self.onStatus?("画面を確認中")
+                        self.onCaptureStarted?()
                     }
 
                 } catch {
