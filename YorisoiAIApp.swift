@@ -1,3 +1,4 @@
+```swift
 import SwiftUI
 
 @main
@@ -20,7 +21,7 @@ struct YorisoiAIApp: App {
 final class SupportModel: ObservableObject {
 
     // ============================================================
-    // MARK: - UI
+    // UI
     // ============================================================
 
     @Published var supportContent: String = ""
@@ -37,7 +38,7 @@ final class SupportModel: ObservableObject {
 
 
     // ============================================================
-    // MARK: - Services
+    // Services
     // ============================================================
 
     private let capture =
@@ -51,7 +52,7 @@ final class SupportModel: ObservableObject {
 
 
     // ============================================================
-    // MARK: - Plan
+    // Plan
     // ============================================================
 
     private var plan: [InstructionStep] = []
@@ -60,7 +61,7 @@ final class SupportModel: ObservableObject {
 
 
     // ============================================================
-    // MARK: - Stable screen recognition
+    // Stable match
     // ============================================================
 
     private var stableMatchCount: Int = 0
@@ -69,7 +70,7 @@ final class SupportModel: ObservableObject {
 
 
     // ============================================================
-    // MARK: - Instruction state
+    // Notification / screen state
     // ============================================================
 
     private var instructionSent: Bool = false
@@ -78,25 +79,20 @@ final class SupportModel: ObservableObject {
 
     private var screenBeforeInstruction: String = ""
 
-
-    // ============================================================
-    // MARK: - Notification protection
-    // ============================================================
-
     private var notificationIgnoreUntil: Date = .distantPast
 
     private let notificationIgnoreInterval: TimeInterval = 4.0
 
 
     // ============================================================
-    // MARK: - Initial screen
+    // First screen
     // ============================================================
 
     private var firstScreenReceived: Bool = false
 
 
     // ============================================================
-    // MARK: - Init
+    // Init
     // ============================================================
 
     init() {
@@ -110,7 +106,9 @@ final class SupportModel: ObservableObject {
                     return
                 }
 
-                self.processOCR(text)
+                self.processOCR(
+                    text
+                )
             }
         }
 
@@ -124,7 +122,8 @@ final class SupportModel: ObservableObject {
                     return
                 }
 
-                self.captureStatus = status
+                self.captureStatus =
+                    status
             }
         }
 
@@ -146,10 +145,8 @@ final class SupportModel: ObservableObject {
 
                 print("================================")
                 print("🔍 キャプチャ開始")
-                print("🔍 最初の画面を待っています")
+                print("🔍 最初の画面待ち")
                 print("================================")
-
-                // ここでは通知しない
             }
         }
 
@@ -166,7 +163,7 @@ final class SupportModel: ObservableObject {
 
 
     // ============================================================
-    // MARK: - Notification permission
+    // Notification permission
     // ============================================================
 
     private func checkNotificationStatus() async {
@@ -175,29 +172,20 @@ final class SupportModel: ObservableObject {
             await notifications.requestPermission()
 
 
-        if granted {
-
-            notificationStatus =
-                "通知ON"
-
-        } else {
-
-            notificationStatus =
-                "通知OFF"
-        }
+        notificationStatus =
+            granted
+            ? "通知ON"
+            : "通知OFF"
     }
 
 
     // ============================================================
-    // MARK: - Start
+    // Start
     // ============================================================
 
     func start() {
 
         guard !isRunning else {
-
-            print("⏸️ すでに支援中です")
-
             return
         }
 
@@ -233,10 +221,6 @@ final class SupportModel: ObservableObject {
     private func startAsync(
         supportContent: String
     ) async {
-
-        // --------------------------------------------------------
-        // 支援計画作成
-        // --------------------------------------------------------
 
         plan =
             planner.makePlan(
@@ -285,10 +269,6 @@ final class SupportModel: ObservableObject {
             ""
 
 
-        // --------------------------------------------------------
-        // 通知許可
-        // --------------------------------------------------------
-
         let granted =
             await notifications.requestPermission()
 
@@ -302,25 +282,20 @@ final class SupportModel: ObservableObject {
         }
 
 
-        notificationStatus =
-            "通知ON"
-
-
-        // --------------------------------------------------------
-        // 実行
-        // --------------------------------------------------------
-
         isRunning =
             true
 
+
         captureStatus =
             "画面を確認しています"
+
+        notificationStatus =
+            "通知ON"
 
 
         print("================================")
         print("🚀 支援開始")
         print("📝 \(supportContent)")
-        print("📝 STEP数: \(plan.count)")
         print("================================")
 
 
@@ -329,7 +304,7 @@ final class SupportModel: ObservableObject {
 
 
     // ============================================================
-    // MARK: - OCR
+    // OCR processing
     // ============================================================
 
     private func processOCR(
@@ -354,8 +329,16 @@ final class SupportModel: ObservableObject {
             normalize(text)
 
 
+        guard !normalizedOCR.isEmpty else {
+
+            print("⚠️ OCR結果なし")
+
+            return
+        }
+
+
         // --------------------------------------------------------
-        // 初回画面
+        // First screen
         // --------------------------------------------------------
 
         if !firstScreenReceived {
@@ -364,35 +347,19 @@ final class SupportModel: ObservableObject {
                 true
 
             print("================================")
-            print("📺 最初の画面")
-            print("📺 OCR:")
-            print(text)
+            print("📺 初回画面取得")
+            print("📺 \(text)")
             print("================================")
-
-            captureStatus =
-                "画面を確認しています"
         }
 
 
         // --------------------------------------------------------
-        // OCRなし
-        // --------------------------------------------------------
-
-        guard !normalizedOCR.isEmpty else {
-
-            print("⚠️ OCR結果が空です")
-
-            return
-        }
-
-
-        // --------------------------------------------------------
-        // 通知直後
+        // Notification immediately after
         // --------------------------------------------------------
 
         if Date() < notificationIgnoreUntil {
 
-            print("⏸️ 通知直後のため判定を一時停止")
+            print("⏸️ 通知直後")
 
             return
         }
@@ -402,21 +369,9 @@ final class SupportModel: ObservableObject {
             plan[currentStepIndex]
 
 
-        print("================================")
-        print("🔍 STEP \(currentStepIndex)")
-        print("📺 OCR:")
-        print(text)
-        print("🎯 条件:")
-        print(step.keywordGroups)
-        print("📝 manualFinish: \(step.manualFinish)")
-        print("📣 instructionSent: \(instructionSent)")
-        print("⏸️ waitingForScreenChange: \(waitingForScreenChange)")
-        print("================================")
-
-
-        // ========================================================
-        // 最終STEP
-        // ========================================================
+        // --------------------------------------------------------
+        // Manual finish step
+        // --------------------------------------------------------
 
         if step.manualFinish {
 
@@ -426,17 +381,16 @@ final class SupportModel: ObservableObject {
 
             if !instructionSent {
 
-                sendManualInstruction()
+                sendCurrentInstruction()
             }
 
 
-            // ★送信ボタンはユーザーが押す
             return
         }
 
 
         // ========================================================
-        // 通知後の最初の画面変更だけ確認
+        // 通知後の画面変更待ち
         // ========================================================
 
         if waitingForScreenChange {
@@ -453,18 +407,18 @@ final class SupportModel: ObservableObject {
                 captureStatus =
                     "操作を待っています"
 
-                print("⏸️ 通知前と同じ画面です")
+                print("⏸️ 画面変化なし")
 
                 return
             }
 
 
-            // ----------------------------------------------------
-            // 画面が変わった
+            // ★ここが重要
             //
-            // ここからは「正しい画面になるまで」
-            // OCR判定を続ける
-            // ----------------------------------------------------
+            // 画面が変わっただけでは
+            // STEP達成にしない。
+            //
+            // 新しい画面をそのまま判定する。
 
             waitingForScreenChange =
                 false
@@ -473,10 +427,10 @@ final class SupportModel: ObservableObject {
                 0
 
             captureStatus =
-                "画面が変わりました。正しい画面を確認しています"
+                "新しい画面を確認しています"
 
             print("================================")
-            print("🆕 画面変更を確認")
+            print("🆕 画面変更検出")
             print("🆕 OCR:")
             print(text)
             print("================================")
@@ -484,7 +438,7 @@ final class SupportModel: ObservableObject {
 
 
         // ========================================================
-        // 現在の画面が正しいか
+        // 現在画面のSTEP判定
         // ========================================================
 
         let matched =
@@ -494,7 +448,14 @@ final class SupportModel: ObservableObject {
             )
 
 
-        print("✅ 現在の画面と一致: \(matched)")
+        print("================================")
+        print("🔍 STEP \(currentStepIndex)")
+        print("✅ matched = \(matched)")
+        print("🎯 keywords = \(step.detectKeywords)")
+        print("🎯 minimum = \(step.minimumMatches)")
+        print("📺 OCR:")
+        print(text)
+        print("================================")
 
 
         if matched {
@@ -524,9 +485,9 @@ final class SupportModel: ObservableObject {
         }
 
 
-        // ========================================================
+        // --------------------------------------------------------
         // 不一致
-        // ========================================================
+        // --------------------------------------------------------
 
         stableMatchCount =
             0
@@ -537,12 +498,10 @@ final class SupportModel: ObservableObject {
 
 
         // --------------------------------------------------------
-        // このSTEPの通知をまだ送っていない
+        // 初回案内
         // --------------------------------------------------------
 
         if !instructionSent {
-
-            print("📣 このSTEPの通知を送ります")
 
             sendCurrentInstruction()
 
@@ -551,19 +510,19 @@ final class SupportModel: ObservableObject {
 
 
         // --------------------------------------------------------
-        // すでに通知済み
+        // すでに案内済み
         //
-        // ★ここでは再通知しない
-        // ★正しい画面になるまで監視し続ける
+        // ★再通知しない
+        // ★現在画面を維持して監視する
         // --------------------------------------------------------
 
-        print("⏸️ このSTEPは通知済み")
-        print("⏸️ 正しい画面になるまで監視します")
+        print("⏸️ 案内済み")
+        print("⏸️ 正しい画面を待っています")
     }
 
 
     // ============================================================
-    // MARK: - Screen matching
+    // STEP match
     // ============================================================
 
     private func matchesCurrentStep(
@@ -571,78 +530,53 @@ final class SupportModel: ObservableObject {
         ocr: String
     ) -> Bool {
 
-        guard !step.keywordGroups.isEmpty else {
+        guard !step.detectKeywords.isEmpty else {
 
             return false
         }
 
 
-        // keywordGroups
-        //
-        // [
-        //    ["Teams"],
-        //    ["チャット", "アクティビティ", "チーム"]
-        // ]
-        //
-        // グループ同士 → AND
-        // グループ内 → OR
+        var matchCount =
+            0
 
 
-        for group in step.keywordGroups {
+        for keyword in
+            step.detectKeywords {
 
-            guard !group.isEmpty else {
+            let normalizedKeyword =
+                normalize(keyword)
+
+
+            guard !normalizedKeyword.isEmpty else {
                 continue
             }
 
 
-            var groupMatched =
-                false
+            if ocr.contains(
+                normalizedKeyword
+            ) {
 
-
-            for keyword in group {
-
-                let normalizedKeyword =
-                    normalize(keyword)
-
-
-                guard !normalizedKeyword.isEmpty else {
-                    continue
-                }
-
-
-                if ocr.contains(
-                    normalizedKeyword
-                ) {
-
-                    groupMatched =
-                        true
-
-                    print(
-                        "✅ キーワード一致: \(keyword)"
-                    )
-
-                    break
-                }
-            }
-
-
-            if !groupMatched {
+                matchCount += 1
 
                 print(
-                    "❌ グループ不一致: \(group)"
+                    "✅ キーワード一致: \(keyword)"
                 )
-
-                return false
             }
         }
 
 
-        return true
+        print(
+            "📊 キーワード一致数: \(matchCount)"
+        )
+
+
+        return matchCount >=
+            step.minimumMatches
     }
 
 
     // ============================================================
-    // MARK: - Send normal instruction
+    // Send instruction
     // ============================================================
 
     private func sendCurrentInstruction() {
@@ -658,9 +592,6 @@ final class SupportModel: ObservableObject {
 
 
         guard !instructionSent else {
-
-            print("⏸️ このSTEPはすでに通知済み")
-
             return
         }
 
@@ -669,20 +600,12 @@ final class SupportModel: ObservableObject {
             plan[currentStepIndex]
 
 
-        guard !step.manualFinish else {
-
-            sendManualInstruction()
-
-            return
-        }
-
-
         currentInstruction =
             step.message
 
 
         // --------------------------------------------------------
-        // 通知前の画面保存
+        // 通知前の画面を保存
         // --------------------------------------------------------
 
         screenBeforeInstruction =
@@ -690,7 +613,7 @@ final class SupportModel: ObservableObject {
 
 
         // --------------------------------------------------------
-        // 状態
+        // 状態変更
         // --------------------------------------------------------
 
         instructionSent =
@@ -718,7 +641,7 @@ final class SupportModel: ObservableObject {
 
 
         print("================================")
-        print("📣 通知送信")
+        print("📣 通知")
         print("📣 STEP \(currentStepIndex)")
         print("📣 \(step.message)")
         print("================================")
@@ -741,102 +664,19 @@ final class SupportModel: ObservableObject {
                 "通知送信済み"
 
 
-            print("✅ 通知処理完了")
-            print("⏸️ ユーザー操作待ち")
+            print("✅ 通知送信完了")
         }
     }
 
 
     // ============================================================
-    // MARK: - Send manual instruction
-    // ============================================================
-
-    private func sendManualInstruction() {
-
-        guard isRunning else {
-            return
-        }
-
-
-        guard currentStepIndex < plan.count else {
-            return
-        }
-
-
-        guard !instructionSent else {
-            return
-        }
-
-
-        let step =
-            plan[currentStepIndex]
-
-
-        currentInstruction =
-            step.message
-
-
-        instructionSent =
-            true
-
-
-        waitingForScreenChange =
-            false
-
-
-        stableMatchCount =
-            0
-
-
-        notificationStatus =
-            "案内を送信中"
-
-
-        captureStatus =
-            "文章を入力して送信してください"
-
-
-        print("================================")
-        print("📣 最終案内")
-        print("📣 \(step.message)")
-        print("================================")
-
-
-        Task { @MainActor [weak self] in
-
-            guard let self else {
-                return
-            }
-
-
-            await self.notifications.send(
-                title: "よりそいAI",
-                body: step.message
-            )
-
-
-            self.notificationStatus =
-                "通知送信済み"
-
-
-            print("✅ 最終案内送信完了")
-            print("🛑 ここからはユーザー操作")
-        }
-    }
-
-
-    // ============================================================
-    // MARK: - Next step
+    // Next STEP
     // ============================================================
 
     private func advanceToNextStep() {
 
         currentStepIndex += 1
 
-
-        // --------------------------------------------------------
-        // 全STEP完了
-        // --------------------------------------------------------
 
         guard currentStepIndex < plan.count else {
 
@@ -846,9 +686,9 @@ final class SupportModel: ObservableObject {
         }
 
 
-        // --------------------------------------------------------
-        // 次STEPを初期化
-        // --------------------------------------------------------
+        let nextStep =
+            plan[currentStepIndex]
+
 
         instructionSent =
             false
@@ -865,54 +705,42 @@ final class SupportModel: ObservableObject {
         stableMatchCount =
             0
 
-
-        let nextStep =
-            plan[currentStepIndex]
-
-
         currentInstruction =
             nextStep.message
 
 
         print("================================")
-        print("➡️ 次のSTEPへ")
+        print("➡️ NEXT STEP")
         print("➡️ STEP \(currentStepIndex)")
         print("➡️ \(nextStep.message)")
         print("================================")
 
 
-        // ========================================================
+        // --------------------------------------------------------
         // 最終STEP
-        // ========================================================
+        // --------------------------------------------------------
 
         if nextStep.manualFinish {
 
-            sendManualInstruction()
+            sendCurrentInstruction()
 
             return
         }
 
 
-        // ========================================================
-        // 次の画面がすでに正しいか確認
-        // ========================================================
+        // --------------------------------------------------------
+        // 現在画面がすでに次STEPなら
+        // その画面を連続確認する
+        // --------------------------------------------------------
 
         let currentOCR =
             normalize(lastOCR)
 
 
-        let alreadyCorrect =
-            matchesCurrentStep(
-                step: nextStep,
-                ocr: currentOCR
-            )
-
-
-        if alreadyCorrect {
-
-            // ----------------------------------------------------
-            // すでに次STEPの画面にいる
-            // ----------------------------------------------------
+        if matchesCurrentStep(
+            step: nextStep,
+            ocr: currentOCR
+        ) {
 
             stableMatchCount =
                 1
@@ -922,16 +750,13 @@ final class SupportModel: ObservableObject {
                 "正しい画面を確認中 1/\(requiredStableMatches)"
 
 
-            print("✅ 次STEPの画面にすでに到達しています")
-
-
-            // 次のOCRで安定確認を続行
             return
         }
 
 
         // --------------------------------------------------------
-        // まだ次STEPの画面ではない
+        // 次STEPの画面ではない
+        // → 次の案内を通知
         // --------------------------------------------------------
 
         sendCurrentInstruction()
@@ -939,7 +764,7 @@ final class SupportModel: ObservableObject {
 
 
     // ============================================================
-    // MARK: - Finish
+    // Finish
     // ============================================================
 
     private func finishSupport() {
@@ -970,7 +795,7 @@ final class SupportModel: ObservableObject {
 
 
     // ============================================================
-    // MARK: - Screen change
+    // Screen changed
     // ============================================================
 
     private func screenHasChanged(
@@ -1041,7 +866,7 @@ final class SupportModel: ObservableObject {
 
 
     // ============================================================
-    // MARK: - Bigrams
+    // Bigrams
     // ============================================================
 
     private func makeBigrams(
@@ -1086,7 +911,7 @@ final class SupportModel: ObservableObject {
 
 
     // ============================================================
-    // MARK: - Normalize
+    // Normalize
     // ============================================================
 
     private func normalize(
@@ -1120,7 +945,7 @@ final class SupportModel: ObservableObject {
 
 
 // ============================================================
-// MARK: - UI
+// UI
 // ============================================================
 
 struct ContentView: View {
@@ -1138,10 +963,6 @@ struct ContentView: View {
                 VStack(
                     spacing: 20
                 ) {
-
-                    // ------------------------------------------------
-                    // タイトル
-                    // ------------------------------------------------
 
                     VStack(
                         spacing: 8
@@ -1169,10 +990,6 @@ struct ContentView: View {
                         )
                     }
 
-
-                    // ------------------------------------------------
-                    // 支援内容
-                    // ------------------------------------------------
 
                     VStack(
                         alignment: .leading,
@@ -1216,10 +1033,6 @@ struct ContentView: View {
                     )
 
 
-                    // ------------------------------------------------
-                    // 開始ボタン
-                    // ------------------------------------------------
-
                     Button {
 
                         model.start()
@@ -1250,10 +1063,6 @@ struct ContentView: View {
                         .horizontal
                     )
 
-
-                    // ------------------------------------------------
-                    // 状態
-                    // ------------------------------------------------
 
                     VStack(
                         alignment: .leading,
@@ -1368,3 +1177,4 @@ struct ContentView: View {
         }
     }
 }
+```
