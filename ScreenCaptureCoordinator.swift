@@ -23,22 +23,22 @@ final class ScreenCaptureCoordinator: NSObject,
 
     private let picker = SCContentSharingPicker.shared
 
-    // 画面フレームを受け取るキュー
+    // 画面フレーム受信用
     private let captureQueue = DispatchQueue(
         label: "yorisoi.capture.queue",
         qos: .userInitiated
     )
 
-    // OCR処理専用キュー
-    // シリアルにして、OCRが重なりすぎないようにする
+    // OCR処理用
     private let visionQueue = DispatchQueue(
         label: "yorisoi.vision.queue",
         qos: .userInitiated
     )
 
-    // OCR実行間隔
+    // OCR実行時刻
     private var lastOCRTime: Date = .distantPast
 
+    // OCR間隔
     private let ocrInterval: TimeInterval = 0.8
 
     // MARK: - Init
@@ -46,29 +46,19 @@ final class ScreenCaptureCoordinator: NSObject,
     override init() {
         super.init()
 
-        // システムの画面共有ピッカーに自分を登録
-        picker.addObserver(self)
+        // iOS 27のAPI
+        picker.add(self)
 
-        // 全画面を選択するようにする
-        var configuration = SCContentSharingPickerConfiguration()
-
-        configuration.allowedPickerModes =
-            .singleDisplay
-
-        // 今回はアプリ自身のカメラ・マイクは使わない
-        configuration.showsCameraControl = false
-        configuration.showsMicrophoneControl = false
-
-        // 選択対象をあとから変更できるようにする
-        configuration.allowsChangingSelectedContent = true
-
-        picker.defaultConfiguration = configuration
+        // iOSでは追加のPicker設定を行わず、
+        // システムの標準設定を利用する
+        picker.defaultConfiguration =
+            SCContentSharingPickerConfiguration()
 
         print("✅ ScreenCaptureCoordinator 初期化")
     }
 
     deinit {
-        picker.removeObserver(self)
+        picker.remove(self)
         print("🛑 ScreenCaptureCoordinator 解放")
     }
 
@@ -82,15 +72,19 @@ final class ScreenCaptureCoordinator: NSObject,
                 return
             }
 
-            // すでに動いている場合は二重起動しない
+            // 二重起動防止
             if self.stream != nil {
-                self.onStatus?("⚠️ 画面キャプチャはすでに動いています")
+                self.onStatus?(
+                    "⚠️ 画面キャプチャはすでに動いています"
+                )
                 return
             }
 
-            self.onStatus?("📱 画面共有を準備しています")
+            self.onStatus?(
+                "📱 画面共有を準備しています"
+            )
 
-            // iOSのシステム画面共有ピッカーを表示
+            // iOSのシステム画面共有ピッカー
             self.picker.present()
 
             print("📱 SCContentSharingPicker を表示")
@@ -111,6 +105,7 @@ final class ScreenCaptureCoordinator: NSObject,
         Task {
 
             do {
+
                 try await stream.stopCapture()
 
                 await MainActor.run {
@@ -135,10 +130,6 @@ final class ScreenCaptureCoordinator: NSObject,
     }
 
     // MARK: - Picker Observer
-    //
-    // ユーザーがシステム画面共有ピッカーで
-    // 「画面全体」を選択するとここに来る
-    //
 
     func contentSharingPicker(
         _ picker: SCContentSharingPicker,
@@ -148,12 +139,17 @@ final class ScreenCaptureCoordinator: NSObject,
 
         print("✅ 画面共有対象が選択されました")
 
-        onStatus?("✅ 画面共有対象を取得しました")
+        DispatchQueue.main.async { [weak self] in
+            self?.onStatus?(
+                "✅ 画面共有対象を取得しました"
+            )
+        }
 
-        // 以前のストリームがあれば停止
+        // 古いストリームを停止
         if let oldStream = self.stream {
 
             Task {
+
                 do {
                     try await oldStream.stopCapture()
                 } catch {
@@ -166,7 +162,7 @@ final class ScreenCaptureCoordinator: NSObject,
             self.stream = nil
         }
 
-        // 新しいストリームを開始
+        // 新しいストリーム開始
         startStream(with: filter)
     }
 
@@ -179,7 +175,11 @@ final class ScreenCaptureCoordinator: NSObject,
 
         print("ℹ️ 画面共有がキャンセルされました")
 
-        onStatus?("画面共有がキャンセルされました")
+        DispatchQueue.main.async { [weak self] in
+            self?.onStatus?(
+                "画面共有がキャンセルされました"
+            )
+        }
     }
 
     // MARK: - Picker Error
@@ -192,9 +192,11 @@ final class ScreenCaptureCoordinator: NSObject,
             "❌ 画面共有開始エラー: \(error.localizedDescription)"
         )
 
-        onStatus?(
-            "⚠️ 画面共有開始エラー: \(error.localizedDescription)"
-        )
+        DispatchQueue.main.async { [weak self] in
+            self?.onStatus?(
+                "⚠️ 画面共有開始エラー: \(error.localizedDescription)"
+            )
+        }
     }
 
     // MARK: - Create Stream
@@ -203,22 +205,11 @@ final class ScreenCaptureCoordinator: NSObject,
         with filter: SCContentFilter
     ) {
 
-        // ScreenCaptureKitのストリーム設定
+        // iOSではMac専用の
+        // pixelFormat / queueDepth / minimumFrameInterval
+        // などは設定しない
+
         let configuration = SCStreamConfiguration()
-
-        // Vision OCRで扱いやすいBGRA
-        configuration.pixelFormat =
-            kCVPixelFormatType_32BGRA
-
-        // 画面全体をそのまま取得
-        //
-        // iOS 27のScreenCaptureKitでは、
-        // 必要以上に解像度を固定せず、
-        // システム側のデフォルトを利用する。
-        //
-        // width / heightを固定すると、
-        // iPhoneの機種によっては画面比率や文字サイズに
-        // 不利になる場合があるため、今は設定しない。
 
         let newStream = SCStream(
             filter: filter,
@@ -228,7 +219,6 @@ final class ScreenCaptureCoordinator: NSObject,
 
         do {
 
-            // 画面フレームを受け取る
             try newStream.addStreamOutput(
                 self,
                 type: .screen,
@@ -239,6 +229,12 @@ final class ScreenCaptureCoordinator: NSObject,
 
             print("✅ SCStream作成成功")
             print("▶️ 画面キャプチャを開始します")
+
+            DispatchQueue.main.async { [weak self] in
+                self?.onStatus?(
+                    "画面キャプチャを開始しています"
+                )
+            }
 
             Task {
 
@@ -280,18 +276,17 @@ final class ScreenCaptureCoordinator: NSObject,
                 "❌ addStreamOutputエラー: \(error.localizedDescription)"
             )
 
-            onStatus?(
-                "❌ 画面出力設定エラー: \(error.localizedDescription)"
-            )
+            DispatchQueue.main.async { [weak self] in
+                self?.onStatus?(
+                    "❌ 画面出力設定エラー: \(error.localizedDescription)"
+                )
+            }
 
             self.stream = nil
         }
     }
 
     // MARK: - SCStreamOutput
-    //
-    // ScreenCaptureKitから画面フレームが届く
-    //
 
     func stream(
         _ stream: SCStream,
@@ -299,17 +294,17 @@ final class ScreenCaptureCoordinator: NSObject,
         of type: SCStreamOutputType
     ) {
 
-        // 今回必要なのは画面だけ
+        // 画面のみ処理
         guard type == .screen else {
             return
         }
 
-        // サンプルバッファが有効か確認
+        // サンプルバッファ確認
         guard sampleBuffer.isValid else {
             return
         }
 
-        // 画像を取得
+        // 画像取得
         guard let pixelBuffer =
                 CMSampleBufferGetImageBuffer(sampleBuffer)
         else {
@@ -325,12 +320,7 @@ final class ScreenCaptureCoordinator: NSObject,
 
         let now = Date()
 
-        // OCRを0.8秒間隔で実行
-        //
-        // ScreenCaptureKitはもっと多くのフレームを
-        // 送ってくる可能性があるが、
-        // 全フレームをOCRすると負荷が高すぎるため
-        // 0.8秒に1回程度にする。
+        // OCRしすぎない
         guard now.timeIntervalSince(lastOCRTime)
                 >= ocrInterval
         else {
@@ -339,7 +329,7 @@ final class ScreenCaptureCoordinator: NSObject,
 
         lastOCRTime = now
 
-        // OCR処理へ渡す
+        // OCRを別キューで実行
         visionQueue.async { [weak self] in
 
             guard let self else {
@@ -389,7 +379,7 @@ final class ScreenCaptureCoordinator: NSObject,
                 return
             }
 
-            // 結果を取得
+            // OCR結果
             guard let observations =
                     request.results
                     as? [VNRecognizedTextObservation]
@@ -428,7 +418,9 @@ final class ScreenCaptureCoordinator: NSObject,
             }
 
             let text =
-                recognizedTexts.joined(separator: "\n")
+                recognizedTexts.joined(
+                    separator: "\n"
+                )
 
             DispatchQueue.main.async {
 
@@ -438,9 +430,7 @@ final class ScreenCaptureCoordinator: NSObject,
                         "⚠️ 画面は取得できていますが、OCRで文字を認識できません"
                     )
 
-                    print(
-                        "⚠️ OCR結果: 文字なし"
-                    )
+                    print("⚠️ OCR結果: 文字なし")
 
                 } else {
 
@@ -456,12 +446,10 @@ final class ScreenCaptureCoordinator: NSObject,
             }
         }
 
-        // 高精度認識
-        //
-        // 速度よりも文字認識の精度を優先する。
+        // 高精度OCR
         request.recognitionLevel = .accurate
 
-        // 日本語を優先し、英語も認識
+        // 日本語 + 英語
         request.recognitionLanguages = [
             "ja-JP",
             "en-US"
@@ -470,7 +458,7 @@ final class ScreenCaptureCoordinator: NSObject,
         // 言語補正
         request.usesLanguageCorrection = true
 
-        // このアプリで頻繁に出る単語
+        // このアプリでよく登場する言葉
         request.customWords = [
             "LINE",
             "Safari",
@@ -488,12 +476,10 @@ final class ScreenCaptureCoordinator: NSObject,
             "孫"
         ]
 
-        // 小さすぎる文字を少し除外
-        //
-        // 画面全体のノイズを減らす。
+        // 小さすぎる文字を除外
         request.minimumTextHeight = 0.012
 
-        // Visionへ画像を渡す
+        // Visionへ渡す
         let handler = VNImageRequestHandler(
             cvPixelBuffer: pixelBuffer,
             orientation: .up,
