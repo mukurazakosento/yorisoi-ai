@@ -131,7 +131,6 @@ final class ScreenCaptureCoordinator: NSObject,
 
         // 音声は不要
         configuration.capturesAudio = false
-        configuration.captureMicrophone = false
 
         // iOSではqueueDepth / minimumFrameIntervalを
         // 明示設定しない。
